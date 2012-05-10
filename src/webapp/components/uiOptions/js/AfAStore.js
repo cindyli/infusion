@@ -49,11 +49,26 @@ var fluid_1_5 = fluid_1_5 || {};
             }
         },
         events: {
-            rulesReady: null
+            rulesReady: null,
+            afterSave: null
         },
+        listeners: {
+            afterSave: "{that}.afterSaveHandler"
+        },
+        preInitFunction: "fluid.afaStore.preInit",
         prefsServerURL: "http://localhost:8080/store/",
         userToken: "123"
     });
+
+    fluid.afaStore.preInit = function (that) {
+        // This listener will check if there are any outstanding saves pending and will make
+        // at most one additinal save of the latest settings state.
+        that.afterSaveHandler = function () {
+            if (that.settings) {
+                that.save(that.settings);
+            }
+        };
+    };
 
     fluid.afaStore.getServerURL = function (prefsServerURL, userToken) {
         return prefsServerURL + userToken;
@@ -66,6 +81,16 @@ var fluid_1_5 = fluid_1_5 || {};
     };
 
     fluid.afaStore.save = function (settings, that) {
+        if (that.saving) {
+            that.settings = settings;
+            return;
+        }
+
+        that.saving = true;
+        if (that.settings) {
+            delete that.settings;
+        }
+
         $.ajax({
             url: fluid.afaStore.getServerURL(that.options.prefsServerURL, that.options.userToken),
             type: "POST",
@@ -73,6 +98,15 @@ var fluid_1_5 = fluid_1_5 || {};
             headers: {
                 "Accept": "application/json",
                 "Content-type": "application/json"
+            },
+            dataType: "json",
+            success: function (data) {
+                if (!data.error) {
+                    fluid.merge(null, that.originalAfAPrefs, data);
+                }
+                delete that.saving;
+                // Check if there were other attempts to save.
+                that.events.afterSave.fire();
             }
         });
     };
