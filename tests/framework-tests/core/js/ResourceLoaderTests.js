@@ -175,6 +175,7 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         var locale = resourceFetcher.options.locale || resourceFetcher.options.defaultLocale;
         fluid.tests.resourceLoader.assertTemplatesLoaded(resources, locale);
         if (locale === "en") {
+            // TODO: Old-fashioned test which bangs on the resourceFetcher options - should use the modelised form instead
             resourceFetcher.options.locale = "fr";
             resourceFetcher.refetchAll();
         } else {
@@ -530,6 +531,38 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         });
     });
 
+    /** FLUID-4982: Refetching individual resources */
+
+    fluid.defaults("fluid.tests.fluid4982refetch", {
+        gradeNames: ["fluid.modelComponent", "fluid.resourceLoader"],
+        members: {
+            remoteModel: {
+                value: 42
+            }
+        },
+        invokers: {
+            fetchModel: "fluid.identity({that}.remoteModel)"
+        },
+        model: "{that}.resources.modelSource.parsed",
+        resources: {
+            modelSource: {
+                promiseFunc: "{that}.fetchModel"
+            }
+        }
+    });
+
+    jqUnit.test("FLUID-4982: Refetching individual resource", function () {
+        var that = fluid.tests.fluid4982refetch();
+        jqUnit.assertDeepEq("Initial model correct", {value: 42}, that.model);
+        var newModel = {
+            newValue: 43
+        };
+        that.remoteModel = newModel;
+        that.resourceFetcher.refetchOneResource("modelSource");
+
+        jqUnit.assertDeepEq("Updated model correct", {newValue: 43}, that.model);
+    });
+
     /** FLUID-4982: Accessing resources via MessageResolver on startup **/
 
     fluid.defaults("fluid.tests.fluid4982messageResolver", {
@@ -713,4 +746,29 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         fluid.tests.FLUID4982badJSON({model: "{that}.resources.initModel.parsed"});
         fluid.unhandledRejectionEvent.addListener(handler, "test");
     });
+
+    jqUnit.asyncTest("FLUID-4982: No unhandled rejection during async construction with rejection handler", function () {
+        var mocks = fluid.tests.FLUID4982.badJSONMocks();
+        var transRec = fluid.construct("fluid4982root", {
+            type: "fluid.tests.FLUID4982badJSON",
+            model: "{that}.resources.initModel.parsed"
+        }, {
+            returnTransaction: true
+        });
+        var handler = function (err) {
+            jqUnit.fail("Should not have received unhandled exception rejection, instead got " + err.message);
+        };
+        // Prevent unhandled rejection from the creation promise itself
+        transRec.outputShadows[0].that.creationPromise.then(null, fluid.identity);
+        transRec.promise.then(null, function (err) {
+            jqUnit.assertTrue("Received error for failed resource", err.message.indexOf("JSON") !== -1);
+            fluid.invokeLater(function () {
+                fluid.unhandledRejectionEvent.removeListener("test");
+                jqUnit.start();
+            });
+            mocks.destroy();
+        });
+        fluid.unhandledRejectionEvent.addListener(handler, "test");
+    });
+
 })();

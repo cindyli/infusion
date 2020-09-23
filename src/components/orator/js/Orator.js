@@ -150,7 +150,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         markup: {
             container: "<div class=\"flc-orator-controller fl-orator-controller\">" +
                 "<div class=\"fl-icon-orator\" aria-hidden=\"true\"></div>" +
-                "<button class=\"flc-orator-controller-playToggle\">" +
+                "<button type=\"button\" class=\"flc-orator-controller-playToggle\">" +
                     "<span class=\"fl-orator-controller-playToggle fl-icon-orator-playToggle\" aria-hidden=\"true\"></span>" +
                 "</button></div>"
         },
@@ -264,7 +264,8 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             utteranceOnPause: null,
             utteranceOnResume: null,
             utteranceOnStart: null,
-            onStop: null
+            onStop: null,
+            onError: null
         },
         utteranceEventMap: {
             onboundary: "utteranceOnBoundary",
@@ -333,7 +334,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                 funcName: "fluid.orator.domReader.queueSpeech",
                 args: ["{that}", "{arguments}.0", "{arguments}.1"]
             },
-            isWord: "fluid.textNodeParser.isWord"
+            isWord: "fluid.textNodeParser.hasGlyph"
         },
         modelListeners: {
             "parseIndex": {
@@ -361,6 +362,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                 args: ["{arguments}.0", "{arguments}.1.interrupt", "{arguments}.1"],
                 priority: "after:removeExtraWhiteSpace"
             },
+            "onError.stop": "{that}.events.onStop",
             "onStop.resetParseQueue": {
                 listener: "{that}.resetParseQueue"
             },
@@ -674,7 +676,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                 return that.queueSpeech(text, {lang: parsedBlock[0].lang, interrupt: interrupt});
             });
 
-            fluid.promise.sequence(queueSpeechPromises).then(that.events.onStop.fire);
+            fluid.promise.sequence(queueSpeechPromises).then(that.events.onStop.fire, that.events.onError.fire);
         }
     };
 
@@ -836,7 +838,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             control: "fl-orator-selectionReader-control"
         },
         markup: {
-            control: "<button class=\"flc-orator-selectionReader-control\"><span class=\"fl-icon-orator\"></span><span class=\"flc-orator-selectionReader-controlLabel\"></span></button>"
+            control: "<button type=\"button\" class=\"flc-orator-selectionReader-control\"><span class=\"fl-icon-orator\"></span><span class=\"flc-orator-selectionReader-controlLabel\"></span></button>"
         },
         model: {
             enabled: true,
@@ -844,6 +846,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             text: ""
         },
         events: {
+            onError: null,
             onSelectionChanged: null,
             onStop: null,
             onToggleControl: null
@@ -858,11 +861,16 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                 funcName: "fluid.orator.selectionReader.bindSelectionEvents",
                 args: ["{that}"]
             },
-            "onSelectionChanged.updateSelection": "{that}.getSelection",
+            "onSelectionChanged.updateSelection": "{that}.setTextFromSelection",
             "onStop.stop": {
                 changePath: "play",
                 value: false,
                 source: "stopMethod"
+            },
+            "onError.stop": {
+                changePath: "play",
+                value: false,
+                source: "onError"
             },
             "onToggleControl.togglePlay": "{that}.toggle"
         },
@@ -892,9 +900,9 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             }
         },
         invokers: {
-            getSelection: {
-                funcName: "fluid.orator.selectionReader.getSelection",
-                args: ["{that}"]
+            setTextFromSelection: {
+                funcName: "fluid.orator.selectionReader.setTextFromSelection",
+                args: ["{that}", "{that}.selectionFilter"]
             },
             play: {
                 changePath: "play",
@@ -908,7 +916,8 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             toggle: {
                 funcName: "fluid.orator.selectionReader.togglePlay",
                 args: ["{that}", "{arguments}.0"]
-            }
+            },
+            selectionFilter: "fluid.textNodeParser.hasGlyph"
         }
     });
 
@@ -925,7 +934,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             var parsed = fluid.orator.selectionReader.parseRange(that.selection.getRangeAt(0), that.parser.parse);
             var speechPromise = speechFn(parsed, true);
 
-            speechPromise.then(that.events.onStop.fire);
+            speechPromise.then(that.events.onStop.fire, that.events.onError.fire);
         }
     };
 
@@ -939,30 +948,26 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
 
     fluid.orator.selectionReader.updateText = function (that, state) {
         if (state) {
-            that.getSelection();
+            that.setTextFromSelection();
         } else {
             that.applier.change("text", "", "ADD", "updateText");
         }
     };
 
     /**
-     * Retrieves the text from the current selection
-     *
-     * @return {String} - the text from the current selection
-     */
-    fluid.orator.selectionReader.getSelectedText = function () {
-        var selection = window.getSelection();
-        return selection.toString();
-    };
-
-    /**
-     * Retrieves the text from the current selection
+     * Retrieves the text from the current selection. If a filter is provided and the string does not pass the filter
+     * check, an empty string `""` is used as the selection.
      *
      * @param {fluid.orator.selectionReader} that - an instance of the component
+     * @param {Function} [filter] - (optional) a function that takes the selection string as an input and returns `true`
+     *                              if it should be accepted and `false` if rejected. If the filter rejects, an empty
+     *                              string `""` is used as the selection.
      */
-    fluid.orator.selectionReader.getSelection = function (that) {
+    fluid.orator.selectionReader.setTextFromSelection = function (that, filter) {
         that.selection = window.getSelection();
-        that.applier.change("text", that.selection.toString(), "ADD", "getSelection");
+        var selectedText = that.selection.toString();
+        selectedText = !filter || filter(selectedText) ? selectedText : "";
+        that.applier.change("text", selectedText, "ADD", "setTextFromSelection");
     };
 
     /**

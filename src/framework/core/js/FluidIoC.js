@@ -11,6 +11,8 @@ You may obtain a copy of the ECL 2.0 License and BSD License at
 https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
 */
 
+/* global Symbol, Proxy */
+
 var fluid_3_0_0 = fluid_3_0_0 || {};
 
 (function ($, fluid) {
@@ -400,16 +402,16 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         }
     };
 
+    // supported, PUBLIC API function
     /** Query for all components matching a selector in a particular tree
      * @param {Component} root - The root component at which to start the search
      * @param {String} selector - An IoCSS selector, in form of a string. Note that since selectors supplied to this function implicitly
-     * match downwards, they need not contain the "head context" followed by whitespace required in the distributeOptions form. E.g.
+     * match downwards, they do not contain the "head context" followed by whitespace required in the distributeOptions form. E.g.
      * simply <code>"fluid.viewComponent"</code> will match all viewComponents below the root.
      * @param {Boolean} flat - [Optional] <code>true</code> if the search should just be performed at top level of the component tree
      * Note that with <code>flat=false</code> this search will scan every component in the tree and may well be very slow.
-     * @return {Component[]} The list of all components matching the selector
+     * @return {Component[]} An array holding all components matching the selector
      */
-    // supported, PUBLIC API function
     fluid.queryIoCSelector = function (root, selector, flat) {
         var parsed = fluid.parseSelector(selector, fluid.IoCSSMatcher);
         var togo = [];
@@ -817,7 +819,8 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
     //     outDistributions: A list of distributions registered from this component, signalling from distributeOptions to clearDistributions
     //     ownScope: A hash of names to components which are in scope from this component - populated in cacheShadowGrades
     //     childrenScope: A hash of names to components which are in scope because they are children of this component (BELOW own ownScope in resolution order)
-    //     potentia: The original potentia record as supplied to registerPotentia
+    //     potentia: The original potentia record as supplied to registerPotentia - populated in fluid.processComponentShell
+    //     createdTransactionId: The tree transaction id in which this component was created - populated in fluid.processComponentShell
     //     childComponents: Hash of key names to subcomponents
     //     lightMergeComponents, lightMergeDynamicComponents: signalling between fluid.processComponentShell and fluid.concludeComponentObservation
     //     modelSourcedDynamicComponents: signalling between fluid.processComponentShell and fluid.initModel
@@ -827,28 +830,49 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         return instantiator && component ? instantiator.idToShadow[component.id] : null;
     };
 
+    // Hack for FLUID-4930 - every test so far other than FLUID-4930 retrunking IV can pass without a single instance
+    // of the path, but apparently as a result of the options distribution this test requires to visit the expansion site twice
+    fluid.pathInEvaluation = function (path, paths) {
+        var index = paths.indexOf(path);
+        return index !== -1 && index !== paths.length - 1;
+    };
+
     // Access the member at a particular path in a component, forcing it to be constructed gingerly if necessary
     // supported, PUBLIC API function
     fluid.getForComponent = function (component, path) {
-        var segs = fluid.model.pathToSegments(path, getConfig);
+        var segs = fluid.model.pathToSegments(path);
         if (segs.length === 0) {
             return component;
         }
+        var instantiator = fluid.globalInstantiator;
         var shadow = fluid.shadowForComponent(component);
-        var getConfig = shadow ? shadow.getConfig : undefined;
-        var next = fluid.get(component, segs[0], getConfig);
-        // Remove this appalling travesty when we eliminate fluid.get, merging, etc. in the FLUID-6143 rewrite
-        if (fluid.isComponent(next)) {
-            return fluid.getForComponent(next, segs.slice(1));
+        if (shadow) {
+            var next = fluid.get(component, segs[0], shadow.getConfig);
+            // Remove this appalling travesty when we eliminate fluid.get, merging, etc. in the FLUID-6143 rewrite
+            if (fluid.isComponent(next)) {
+                return fluid.getForComponent(next, segs.slice(1));
+            } else {
+                var inEvaluationPaths = instantiator.inEvaluationPaths;
+                var inEvaluationPath = component.id + ":" + path;
+                if (fluid.pathInEvaluation(inEvaluationPath, inEvaluationPaths)) {
+                    fluid.fail("Error in component configuration - a circular reference was found during evaluation of path " + path + " for component " + fluid.dumpComponentAndPath(component) +
+                        ": a circular set of references was found - for more details, see the activity records following this message in the console");
+                } else {
+                    inEvaluationPaths.push(inEvaluationPath);
+                    var togo = fluid.get(component, path, shadow.getConfig);
+                    inEvaluationPaths.pop();
+                    return togo;
+                }
+            }
         } else {
-            return fluid.get(component, path, getConfig);
+            return fluid.get(component, path);
         }
     };
 
     // The EL segment resolver strategy for resolving concrete members
     fluid.concreteStrategy = function (component, thisSeg, index, segs) {
         var atval = component[thisSeg];
-        if (atval === fluid.inEvaluationMarker) {
+        if (atval === fluid.inEvaluationMarker) { // Only remaining user is currently modelRelay return, since inEvaluation hack covers ordinary material
             fluid.fail("Error in component configuration - a circular reference was found during evaluation of path segment \"" + thisSeg + " of path ", segs,
                 "\": for more details, see the activity records following this message in the console, or issue fluid.setLogging(fluid.logLevel.TRACE) when running your application");
         }
@@ -1040,6 +1064,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             idToShadow: {},
             modelTransactions: {}, // a map of transaction id to map of component id to records of components enlisted in a current model initialisation transaction
             treeTransactions: {}, // a map of transaction id to TreeTransaction - see fluid.beginTreeTransaction for initial values
+            inEvaluationPaths: [], // stack of paths in evaluation via fluid.getForComponent - hack for FLUID-4930
             // any tree instantiation in progress. This is primarily read in order to enlist in bindDeferredComponent.
             currentTreeTransactionId: null,
             composePath: fluid.model.composePath, // For speed, we declare that no component's name may contain a period
@@ -1356,7 +1381,11 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         return recordKey + (sourceKey === 0 ? "" : "-" + sourceKey); // TODO: configurable name strategies
     };
 
-    fluid.concludeAnyTransaction = function () {
+    /** Conclude any tree transaction which is currently in progress. A "catch-all" that is currently operated in the following two situations:
+     * - At the end of any model transaction, to conclude the construction/destruction of any components brought in or out of existence through lensing from the model
+     * - At the end (namespace "fluid-componentConstruction") of any event firing, to conclude construction of any createOnEvent components designated through the event
+     */
+    fluid.concludeAnyTreeTransaction = function () {
         var instantiator = fluid.globalInstantiator;
         var transactionId = instantiator.currentTreeTransactionId;
         if (transactionId) {
@@ -1398,8 +1427,8 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         };
         event.addListener(constructListener);
         fluid.recordListener(event, constructListener, shadow);
-        event.addListener(fluid.concludeAnyTransaction, "fluid-componentConstruction", "last:transaction");
-        fluid.recordListener(event, fluid.concludeAnyTransaction, shadow);
+        event.addListener(fluid.concludeAnyTreeTransaction, "fluid-componentConstruction", "last:transaction");
+        fluid.recordListener(event, fluid.concludeAnyTreeTransaction, shadow);
     };
 
     fluid.markSubtree = function (instantiator, that, path, state) {
@@ -1437,6 +1466,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         var mergeOptions = shadow.mergeOptions;
         fluid.pushActivity("concludeComponentObservation", "constructing component of type %componentName at path %path",
             {componentName: that.typeName, path: shadow.path});
+        mergeOptions.evaluateFully = true;
 
         for (var i = 0; i < mergeOptions.mergeBlocks.length; ++i) {
             mergeOptions.mergeBlocks[i].initter();
@@ -1752,6 +1782,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                 segs: fromModelPath.concat(isBoolean ? [] : ["*"])
             },
             excludeSource: "init",
+            transactional: true,
             funcName: "fluid.lensedComponentModelListener",
             args: ["{that}", key, "{change}.path", "{change}.value", isBoolean]
         };
@@ -1815,7 +1846,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      *     function is currently implemented in `fluid.constructLensedComponents` in DataBinding.js
      */
     fluid.registerSourcedDynamicComponentsTriage = function (potentia, shell, sourceOrSources, lightMerge, key, isBoolean, localRecordContributor) {
-        if (isBoolean) {
+        if (isBoolean && sourceOrSources) {
             fluid.registerSourcedDynamicComponent(potentia, shell, sourceOrSources, 0, lightMerge, key, localRecordContributor);
         } else {
             fluid.registerSourcedDynamicComponents(potentia, shell, sourceOrSources, lightMerge, key, localRecordContributor);
@@ -1828,6 +1859,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         var instantiator = fluid.globalInstantiator;
         var shadow = instantiator.idToShadow[shell.id];
         shadow.potentia = potentia;
+        shadow.createdTransactionId = transRec.transactionId;
 
         var mergeOptions = shadow.mergeOptions;
 
@@ -1895,6 +1927,9 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         potentia.segs = segs;
         potentia.memberName = fluid.peek(segs);
         potentia.parentThat = fluid.getImmediate(fluid.rootComponent, segs.slice(0, -1));
+        if (potentia.type === "create" && !potentia.parentThat) {
+            fluid.fail("Cannot construct component at path ", segs, " whose parent does not exist");
+        }
     };
 
     fluid.fetchNestedInjectedComponentReference = function (transRec, potentiaList, injected, head, parentPath, segs) {
@@ -1932,7 +1967,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
     fluid.fetchInjectedComponentReference = function (transRec, potentiaList, injected, parentThat) {
         var instantiator = fluid.globalInstantiator;
         if (injected.expander) {
-            return fluid.expandImmediate(injected, parentThat);
+            return fluid.expandImmediate(injected, parentThat, null, true);
         } else {
             var parsed = fluid.parseContextReference(injected);
             var head = fluid.resolveContext(parsed.context, parentThat);
@@ -2350,6 +2385,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         var onException = function (err) {
             if (!transRec.cancelled) {
                 delete transRec.rootSequencer;
+                instantiator.inEvaluationPaths.length = 0;
                 fluid.cancelTreeTransaction(transactionId, instantiator, err);
                 onConclude();
             }
@@ -2465,6 +2501,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         if (!constructOptions.transactionId) {
             fluid.commitPotentiae(transRec.transactionId);
         }
+        fluid.adaptTransactionFailure(transRec);
         return constructOptions.returnTransaction ? transRec : fluid.getImmediate(fluid.rootComponent, potentia.segs);
     };
 
@@ -3257,8 +3294,9 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
 
     // Main pathway for freestanding material that is not part of a component's options. As well as being rather more
     // rapid, this pathway does not clone containers from "source" to "target"
-    fluid.expandImmediate = function (source, that, localRecord) {
+    fluid.expandImmediate = function (source, that, localRecord, noproxy) {
         var options = fluid.makeStackResolverOptions(that, localRecord, true); // TODO: ELstyle and target are now ignored
+        options.noproxy = !!noproxy;
         var root = fluid.preExpand(source);
         fluid.expandImmediateImpl(root, options);
         return root.source;
@@ -3278,6 +3316,30 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             fluid.fail("Unknown expander with type " + source.expander.type);
         }
         return expander(deliverer, source, options);
+    };
+
+    fluid.proxyComponentHandler = function (target, prop) {
+        // Use "Symbol.toStringTag" to make sure that tricks like fluid.isArrayable work on the target
+        return prop === Symbol.toStringTag ? Object.prototype.toString.call(target) :
+            prop in target ? target[prop] : fluid.getForComponent(target, prop);
+    };
+
+    fluid.proxyComponent = function (component) {
+        var shadow = fluid.shadowForComponent(component);
+        if (!shadow.proxy) {
+            shadow.proxy = new Proxy(component, {
+                get: fluid.proxyComponentHandler
+            });
+        }
+        return shadow.proxy;
+    };
+
+    fluid.proxyComponentArgs = function (args) {
+        args.forEach(function (arg, i) {
+            if (fluid.isComponent(arg) && arg.lifecycleStatus !== "treeConstructed") {
+                args[i] = fluid.proxyComponent(arg);
+            }
+        });
     };
 
     fluid.registerNamespace("fluid.expander");
@@ -3308,6 +3370,9 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             if (root === undefined && !inLocal) { // last-ditch attempt to get exotic EL value from component
                 root = fluid.getForComponent(component, segs);
             }
+            if (!fast && !options.noproxy && fluid.isComponent(root)) {
+                return fluid.proxyComponent(root);
+            }
             return root;
         } else if (segs.length > 0) {
             fluid.triggerMismatchedPathError(source.expander, options.contextThat);
@@ -3328,8 +3393,12 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         if (options.recurse) { // only available in the path from fluid.expandOptions - this will be abolished in the end
             args = options.recurse([], args);
         } else {
-            expander = fluid.expandImmediate(expander, options.contextThat, options.localRecord);
+            // TODO: The fact that we pass through the noproxy argument suggests that arguments to expanders are getting double-expanded
+            expander = fluid.expandImmediate(expander, options.contextThat, options.localRecord, expander.noproxy);
             args = expander.args;
+        }
+        if (!expander.noproxy) {
+            fluid.proxyComponentArgs(args);
         }
         var funcEntry = expander[whichFuncEntry];
         var func = (options.expandSource ? options.expandSource(funcEntry) : funcEntry) || fluid.recordToApplicable(expander, options.contextThat);

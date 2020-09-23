@@ -48,11 +48,12 @@ var fluid = fluid || fluid_3_0_0;
         window : typeof self !== "undefined" ? self : {};
 
     // A standard utility to schedule the invocation of a function after the current
-    // stack returns. On browsers this defaults to setTimeout(func, 1) but in
+    // stack returns. On browsers this defaults to setTimeout(func, 0) but in
     // other environments can be customised - e.g. to process.nextTick in node.js
     // In future, this could be optimised in the browser to not dispatch into the event queue
+    // See https://github.com/YuzuJS/setImmediate for a more verbose but very robust replacement
     fluid.invokeLater = function (func) {
-        return setTimeout(func, 1);
+        return setTimeout(func, 0);
     };
 
     // The following flag defeats all logging/tracing activities in the most performance-critical parts of the framework.
@@ -1304,6 +1305,8 @@ var fluid = fluid || fluid_3_0_0;
         return obj[fnName].apply(obj, fluid.makeArray(args));
     };
 
+    // Stub for function in FluidIoC.js
+    fluid.proxyComponentArgs = fluid.identity;
     /**
      * Allows for the calling of a function from an EL expression "functionPath", with the arguments "args", scoped to an framework version "environment".
      * @param {Object} functionPath - An EL expression
@@ -1316,7 +1319,9 @@ var fluid = fluid || fluid_3_0_0;
         if (!func) {
             fluid.fail("Error invoking global function: " + functionPath + " could not be located");
         } else {
-            return func.apply(null, fluid.isArrayable(args) ? args : fluid.makeArray(args));
+            var argsArray = fluid.isArrayable(args) ? args : fluid.makeArray(args);
+            fluid.proxyComponentArgs(argsArray);
+            return func.apply(null, argsArray);
         }
     };
 
@@ -2439,13 +2444,6 @@ var fluid = fluid || fluid_3_0_0;
                     return oldTarget;
                 }
             }
-            else {
-                if (target !== fluid.inEvaluationMarker) { // TODO: blatant "coding to the test" - this enables the simplest "re-trunking" in
-                    // FluidIoCTests to function. In practice, we need to throw away this implementation entirely in favour of the
-                    // "iterative deepening" model coming with FLUID-4925
-                    target[name] = fluid.inEvaluationMarker;
-                }
-            }
             if (sources === undefined) { // recover our state in case this is an external entry point
                 segs = fluid.makeArray(segs); // avoid trashing caller's segs
                 sources = regenerateSources(options.sources, segs, i - 1, options.sourceStrategies);
@@ -2479,9 +2477,7 @@ var fluid = fluid || fluid_3_0_0;
                         else {
                             // write this in early, since early expansions may generate a trunk object which is written in to by later ones
                             thisTarget = fluid.mergeOneImpl(thisTarget, thisSource, j, newSources, newPolicy, newPolicyHolder, i, segs, options);
-                            if (target !== fluid.inEvaluationMarker) {
-                                target[name] = thisTarget;
-                            }
+                            target[name] = thisTarget;
                         }
                     }
                 }
@@ -2493,9 +2489,6 @@ var fluid = fluid || fluid_3_0_0;
                 if (fluid.isPlainObject(thisTarget)) {
                     fluid.fetchMergeChildren(thisTarget, i, segs, newSources, newPolicyHolder, options);
                 }
-            }
-            if (oldTarget === undefined && newSources.length === 0 && target[name] === fluid.inEvaluationMarker) {
-                delete target[name]; // remove the evaluation marker - nothing to evaluate
             }
             return thisTarget;
         };
@@ -2927,6 +2920,22 @@ var fluid = fluid || fluid_3_0_0;
         return nickName + "-" + id;
     };
 
+    // Adapt a promise rejection indicating a transaction failure back to an exception for clients in orthochronous code
+    fluid.adaptTransactionFailure = function (transRec) {
+        var returned = false;
+        // This registration MUST go last otherwise we mask the catch->reject handler in bindDeferredComponent
+        transRec.promise.then(null, function (e) {
+            if (!returned) {
+                throw e;
+            } else {
+                if (transRec.promise.onReject.length === 0) {
+                    fluid.fireUnhandledRejection(transRec.promise, e);
+                }
+            }
+        });
+        returned = true;
+    };
+
     // unsupported, NON-API function
     // After some error checking, this *is* the component creator function
     fluid.initFreeComponent = function (type, initArgs) {
@@ -2955,18 +2964,8 @@ var fluid = fluid || fluid_3_0_0;
         };
         var transRec = fluid.registerPotentia(potentia);
         var shadow = fluid.commitPotentiae(transRec.transactionId);
-        var returned = false;
-        // This registration MUST go last otherwise we mask the catch->reject handler in bindDeferredComponent
-        transRec.promise.then(null, function (e) {
-            if (!returned) {
-                throw e;
-            } else {
-                if (transRec.promise.onReject.length === 0) {
-                    fluid.fireUnhandledRejection(transRec.promise, e);
-                }
-            }
-        });
-        returned = true;
+        fluid.adaptTransactionFailure(transRec);
+
         return shadow && shadow.that;
     };
 

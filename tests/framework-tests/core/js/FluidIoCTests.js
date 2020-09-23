@@ -497,6 +497,140 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         jqUnit.assertDeepEq("Successfully evaluated all options", expected, that.options.arrowGeometry);
     });
 
+    /** FLUID-4930 test II - taken from bagatelle renderer **/
+
+    fluid.tests.FLUID4930combine = function () {
+        return fluid.makeArray(arguments).join(", ");
+    };
+
+    fluid.defaults("fluid.tests.retrunkingII", {
+        gradeNames: "fluid.component",
+        dom: "@expand:fluid.identity({that}.options.selectors)",
+        selectors: {
+            svg: ".flc-bagatelle-svg",
+            taxonDisplay: ".fld-bagatelle-taxonDisplay",
+            autocomplete: ".fld-bagatelle-autocomplete",
+            segment: ".fld-bagatelle-segment",
+            phyloPic: ".fld-bagatelle-phyloPic",
+            mousable: "@expand:fluid.tests.FLUID4930combine({that}.options.selectors.segment, {that}.options.selectors.phyloPic)"
+        }
+    });
+
+    jqUnit.test("FLUID-4930: Retrunking with expanders", function () {
+        var that = fluid.tests.retrunkingII();
+        jqUnit.assertEquals("Expander should have consumed sibling values", ".fld-bagatelle-segment, .fld-bagatelle-phyloPic",
+            that.options.selectors.mousable);
+    });
+
+    /** FLUID-4930 retrunking test III - Structure taken from "gpii.express.user.validationMiddleware" */
+
+    fluid.defaults("fluid.tests.FLUID4930.schemaHolder", {
+        gradeNames: "fluid.component",
+        schema: {
+            type: "object",
+            title: "gpii-express-user core user schema",
+            description: "This schema defines the common format for user data transmitted and received by the gpii-express-user library.",
+            definitions: {
+                email: {
+                    type: "string",
+                    format: "email",
+                    required: true,
+                    errors: {
+                        "": "gpii.express.user.email"
+                    }
+                },
+                username: {
+                    required: true,
+                    type: "string",
+                    minLength: 1,
+                    errors: {
+                        "": "gpii.express.user.username"
+                    }
+                }
+            }
+        }
+    });
+
+    fluid.defaults("fluid.tests.FLUID4930.signup", {
+        gradeNames: ["fluid.tests.FLUID4930.schemaHolder", "fluid.resourceLoader", "fluid.modelComponent"],
+        resources: {
+            schema: {
+                promiseFunc: "{that}.generateSchema"
+            }
+        },
+        model: {
+            inputSchema: "{that}.resources.schema.parsed"
+        },
+        invokers: {
+            generateSchema: "fluid.tests.FLUID4930.generateSchema({that}.options.schema)"
+        },
+        schema: {
+            title: "gpii-express-user user signup schema",
+            description: "This schema defines the format accepted when creating a new user.",
+            properties: {
+                email: "{that}.options.schema.definitions.email",
+                username: "{that}.options.schema.definitions.username",
+                password: "{that}.options.schema.definitions.password",
+                confirm: "{that}.options.schema.definitions.confirm",
+                profile: "{that}.options.schema.definitions.profile"
+            }
+        }
+    });
+
+    fluid.tests.FLUID4930.generateSchema = function (schema) {
+        var togo = fluid.promise();
+        togo.resolve(schema);
+        return togo;
+    };
+
+    jqUnit.test("FLUID-4930: Retrunking III", function () {
+        var that = fluid.tests.FLUID4930.signup();
+        jqUnit.assertEquals("Successfully evaluated email option", "string", that.options.schema.properties.email.type);
+        jqUnit.assertEquals("Successfully evaluated username option", "string", that.options.schema.properties.username.type);
+    });
+
+    /** FLUID-4930 retrunking test IV - Structure taken from "gpii.express.user.verify.resend" */
+
+    fluid.defaults("fluid.tests.FLUID4930.verify.api", {
+        gradeNames: "fluid.component",
+        distributeOptions: {
+            "source": "{that}.options.couch",
+            "target": "{that resend}.options.couch"
+        },
+        couch: {
+            port: 5984,
+            userDbName: "users",
+            userDbUrl: {
+                expander: {
+                    funcName: "fluid.stringTemplate",
+                    args:     ["http://localhost:%port/%userDbName", { port: "{that}.options.couch.port", userDbName: "{that}.options.couch.userDbName" }]
+                }
+            }
+        },
+        components: {
+            resend: {
+                type: "fluid.tests.FLUID4930.verify.resend"
+            }
+        }
+    });
+
+    fluid.defaults("fluid.tests.FLUID4930.verify.resend", {
+        gradeNames: "fluid.component",
+        urls: {
+            read: {
+                expander: {
+                    funcName: "fluid.stringTemplate",
+                    args:     ["%userDbUrl/_design/lookup/_view/byUsernameOrEmail", "{that}.options.couch"]
+                }
+            }
+        }
+    });
+
+    jqUnit.test("FLUID-4930: Retrunking IV", function () {
+        var that = fluid.tests.FLUID4930.verify.api();
+        jqUnit.assertEquals("Successfully evaluated email option", "http://localhost:5984/users/_design/lookup/_view/byUsernameOrEmail", that.resend.options.urls.read);
+    });
+
     /** FLUID-5755 - another "exotic types" test - this time a native array **/
 
     fluid.defaults("fluid.tests.componentWithTypedArrayOption", {
@@ -4167,188 +4301,28 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         }, ["circular", "model"]);
     });
 
-    /** FLUID-6390 - Lensed components as a hash **/
+    /** FLUID-6372 - Proxies to gear component access during construction **/
 
-    fluid.defaults("fluid.tests.fluid6390child", {
-        gradeNames: "fluid.modelComponent"
-    });
-
-    fluid.defaults("fluid.tests.fluid6390hashRoot", {
-        gradeNames: "fluid.modelComponent",
-        model: {
-            arena: {
-                element1: {
-                    value: 42
-                },
-                element2: {
-                    value: 43
-                }
-            }
-        },
-        dynamicComponents: {
-            arenaComponents: {
-                sources: "{that}.model.arena",
-                type: "fluid.tests.fluid6390child",
-                options: {
-                    model: {
-                        arenaValue: "{source}.value"
-                    }
-                }
-            }
+    fluid.defaults("fluid.tests.fluid6372root", {
+        gradeNames: "fluid.component",
+        earlyExpander: "@expand:fluid.tests.fluid6372invoke({that})",
+        invokers: {
+            lateInvoker: "fluid.tests.fluid6372invokeLate({that})",
+            laterInvoker: "fluid.identity(42)"
         }
     });
 
-    fluid.tests.fluid6390assertModelValues = function (message, that, expected) {
-        var children = fluid.queryIoCSelector(that, "fluid.tests.fluid6390child");
-        var values = fluid.getMembers(children, ["model", "arenaValue"]);
-        jqUnit.assertDeepEq(message, expected, values);
+    fluid.tests.fluid6372invokeLate = function (that) {
+        return that.laterInvoker();
     };
 
-    jqUnit.test("FLUID-6390: Lensed components as a hash", function () {
-        var that = fluid.tests.fluid6390hashRoot();
-        var children = fluid.queryIoCSelector(that, "fluid.tests.fluid6390child");
-        jqUnit.assertEquals("Two model-driven subcomponents created", 2, children.length);
-        fluid.tests.fluid6390assertModelValues("Initial model values are correct", that, [42, 43]);
-        that.applier.change("arena.element3.value", 44);
-        fluid.tests.fluid6390assertModelValues("Model values are correct with new component", that, [42, 43, 44]);
-        that.applier.change("arena.element1.value", 1);
-        fluid.tests.fluid6390assertModelValues("Model values are correct with forward relay", that, [1, 43, 44]);
-        that.applier.change("arena.element1", null, "DELETE");
-        fluid.tests.fluid6390assertModelValues("Model deletion relayed to component deletion", that, [43, 44]);
-        var component3 = that["arenaComponents-element3"];
-        jqUnit.assertTrue("Fetched component via fluid.componentForModelPath", fluid.isComponent(component3));
-        component3.applier.change("arenaValue", 3);
-        jqUnit.assertEquals("Model value propagated through backward relay", 3, that.model.arena.element3.value);
-        var component2 = that["arenaComponents-element2"];
-        component2.destroy();
-        var expectedFinalArena = {
-            element3: {
-                value: 3
-            }
-        };
-        jqUnit.assertDeepEq("Relay of component destruction back to deletion of source model", expectedFinalArena, that.model.arena);
-    });
-
-    fluid.defaults("fluid.tests.fluid6390booleanRoot", {
-        gradeNames: "fluid.modelComponent",
-        model: {
-            shouldComponentExist: 1
-        },
-        dynamicComponents: {
-            conditionalComponent: {
-                source: "{that}.model.shouldComponentExist",
-                type: "fluid.component"
-            }
-        }
-    });
-
-    jqUnit.test("FLUID-6390: Lensed components from a boolean", function () {
-        var that = fluid.tests.fluid6390booleanRoot();
-        jqUnit.assertTrue("Conditional component should have been constructed", fluid.isComponent(that.conditionalComponent));
-        that.conditionalComponent.destroy();
-        jqUnit.assertEquals("Destruction of component should have unset model value", false, that.model.shouldComponentExist);
-        jqUnit.assertUndefined("Conditional component should not have been reconstructed", that.conditionalComponent);
-        that.applier.change("shouldComponentExist", true);
-        jqUnit.assertTrue("Conditional component should have been reconstructed", fluid.isComponent(that.conditionalComponent));
-        jqUnit.assertEquals("Model flag should not have been unset", true, that.model.shouldComponentExist);
-        that.applier.change("shouldComponentExist", false);
-        jqUnit.assertUndefined("Conditional component should have been destroyed", that.conditionalComponent);
-        jqUnit.assertEquals("Model flag should not have been reset", false, that.model.shouldComponentExist);
-    });
-
-    /** FLUID-6390 - Hall of mirrors lensed components **/
-
-    fluid.registerNamespace("fluid.tests.fluid6390mirror");
-
-    fluid.tests.fluid6390mirror.model2 = {
-        headings: [{
-            level: 1,
-            text: "h1",
-            url: "#h1",
-            headings: [{
-                level: 2,
-                text: "h2",
-                url: "#h2"
-            }]
-        }]
+    fluid.tests.fluid6372invoke = function (that) {
+        return that.lateInvoker();
     };
 
-    fluid.tests.fluid6390mirror.model6 = {
-        headings: [{
-            level: 1,
-            text: "h1",
-            url: "#h1",
-            headings: [{
-                level: 2,
-                text: "h2",
-                url: "#h2",
-                headings: [{
-                    level: 3,
-                    text: "h3",
-                    url: "#h3",
-                    headings: [{
-                        level: 4,
-                        text: "h4",
-                        url: "#h4",
-                        headings: [{
-                            level: 5,
-                            text: "h5",
-                            url: "#h5",
-                            headings: [{
-                                level: 6,
-                                text: "h6",
-                                url: "#h6"
-                            }]
-                        }]
-                    }]
-                }]
-            }]
-        }]
-    };
-
-    fluid.defaults("fluid.tests.fluid6390levels", {
-        gradeNames: "fluid.tests.fluid6390heading"
-    });
-
-    fluid.defaults("fluid.tests.fluid6390heading", {
-        gradeNames: "fluid.modelComponent",
-        model: {
-            // [text: heading, url: linkURL, headings: [ an array of subheadings in the same format ]
-        },
-        dynamicComponents: {
-            headings: {
-                sources: "{that}.model.headings",
-                type: "fluid.tests.fluid6390heading",
-                options: {
-                    model: "{source}"
-                }
-            }
-        }
-    });
-
-    fluid.tests.fluid6390defaultModels = function (rootModel, depth) {
-        var togo = [], model = rootModel;
-        for (var i = 0; i < depth; ++i) {
-            togo.push(model);
-            model = fluid.getImmediate(model, ["headings", "0"]);
-        }
-        return togo;
-    };
-
-    fluid.tests.fluid6390mirrorTest = function (model, levels) {
-        var that = fluid.tests.fluid6390levels({
-            model: model
-        });
-        var headings = [that].concat(fluid.queryIoCSelector(that, "fluid6390heading"));
-        jqUnit.assertEquals("Correct number of headings constructed", levels, headings.length);
-        var expectedModels = fluid.tests.fluid6390defaultModels(model, levels);
-        var models = fluid.getMembers(headings, "model");
-        jqUnit.assertDeepEq("Nested models should be correct", expectedModels, models);
-    };
-
-    jqUnit.test("FLUID-6390: Hall of mirrors lensed components", function () {
-        fluid.tests.fluid6390mirrorTest(fluid.tests.fluid6390mirror.model2, 3);
-        fluid.tests.fluid6390mirrorTest(fluid.tests.fluid6390mirror.model6, 7);
+    jqUnit.test("FLUID-6372: Access to component material via proxies", function () {
+        var that = fluid.tests.fluid6372root();
+        jqUnit.assertEquals("Expander gained access to invoker through blind component reference", 42, that.options.earlyExpander);
     });
 
     /** FLUID-6414 - Dynamic grades via expanders **/
@@ -5915,6 +5889,23 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         fluid.destroy("fluid_tests_nexusRoot");
 
         jqUnit.assertUndefined("fluid.componentForPath returns undefined for destroyed component", fluid.componentForPath(globalPath));
+    });
+
+    /** FLUID-6509 - exceptions from fluid.construct **/
+
+    fluid.defaults("fluid.tests.throwingComponent", {
+        gradeNames: "fluid.component",
+        listeners: {
+            "onCreate.throw": "fluid.fail(\"Error during construction\")"
+        }
+    });
+
+    jqUnit.test("FLUID-6509 - Exceptions from fluid.construct", function () {
+        jqUnit.expectFrameworkDiagnostic("Got exception", function () {
+            fluid.construct("fluid_6509_thrower", {
+                type: "fluid.tests.throwingComponent"
+            });
+        }, "Error during construction");
     });
 
     /** Test potentia idioms **/

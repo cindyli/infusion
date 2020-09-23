@@ -575,7 +575,7 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         modules: [{
             name: "fluid.orator.domReader",
             tests: [{
-                expect: 51,
+                expect: 57,
                 name: "DOM Reading",
                 sequence: [{
                     // Play sequence
@@ -696,6 +696,24 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
                 }, {
                     funcName: "fluid.tests.orator.domReaderTester.verifyEmptyParseQueueState",
                     args: ["Replayed Self Voicing completed", "{domReader}"]
+                }, {
+                    // utterance threw an error
+                    // clear speechRecord
+                    funcName: "fluid.set",
+                    args: ["{tts}", "speechRecord", []]
+                }, {
+                    func: "{tts}.applier.change",
+                    args: ["throwError", true]
+                }, {
+                    func: "{domReader}.events.play.fire"
+                }, {
+                    listener: "fluid.tests.orator.domReaderTester.verifyEmptyParseQueueState",
+                    args: ["Self Voicing terminated by utterance error", "{domReader}"],
+                    spec: {priority: "last:testing"},
+                    event: "{domReader}.events.onError"
+                }, {
+                    func: "{tts}.applier.change",
+                    args: ["throwError", false]
                 }, {
                     // pause when stopped
                     funcName: "fluid.mock.textToSpeech.clearRequestRecord",
@@ -826,17 +844,6 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         fluid.orator.selectionReader.stopSpeech (false, function () {
             jqUnit.assert("The cancel callback function should not have been triggered");
         });
-    });
-
-    jqUnit.test("Test fluid.orator.selectionReader.getSelectedText", function () {
-        var elm = $(".flc-orator-selectionReader-test-selection");
-        fluid.tests.orator.selection.selectNode(elm);
-
-        var selectedText = fluid.orator.selectionReader.getSelectedText();
-        jqUnit.assertEquals("The correct text should be selected", elm.text(), selectedText);
-
-        // selection cleanup
-        fluid.tests.orator.selection.collapse();
     });
 
     fluid.tests.orator.selectionReader.mockRange = {
@@ -1003,7 +1010,7 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         selector: ".flc-orator-selectionReader-test",
         options: {},
         expected: [{
-            text: "\n            Selection Test\n            Other Text\n            Change ",
+            text: "\n            Selection Test\n            \n            Other Text\n            Change ",
             options: {lang: "en"}
         }, {
             text: "Language",
@@ -1016,7 +1023,7 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         name: "Selected parent element - undefined options",
         selector: ".flc-orator-selectionReader-test",
         expected: [{
-            text: "\n            Selection Test\n            Other Text\n            Change ",
+            text: "\n            Selection Test\n            \n            Other Text\n            Change ",
             options: {lang: "en"}
         }, {
             text: "Language",
@@ -1186,7 +1193,8 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         },
         selectors: {
             text: ".flc-orator-selectionReader-test-selection",
-            otherText: ".flc-orator-selectionReader-test-selectionTwo"
+            otherText: ".flc-orator-selectionReader-test-selectionTwo",
+            whitespaceText: ".flc-orator-selectionReader-test-selectionWhitespace"
         }
     });
 
@@ -1211,6 +1219,11 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         testOpts: {
             expected: {
                 noSelection: {
+                    play: false,
+                    text: "",
+                    enabled: true
+                },
+                whitespaceSelection: {
                     play: false,
                     text: "",
                     enabled: true
@@ -1240,7 +1253,7 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
         modules: [{
             name: "fluid.orator.selectionReader",
             tests: [{
-                expect: 36,
+                expect: 40,
                 name: "Selection Reader work flow",
                 sequence: [{
                     listener: "fluid.tests.orator.verifySelectionState",
@@ -1273,6 +1286,20 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
                     spec: {priority: "last:testing", path: "play"},
                     changeEvent: "{selectionReader}.applier.modelChanged"
                 }, {
+                    // utterance threw an error while playing
+                    func: "{tts}.applier.change",
+                    args: ["throwError", true]
+                }, {
+                    func: "{selectionReader}.play"
+                }, {
+                    listener: "fluid.tests.orator.verifySelectionState",
+                    args: ["{selectionReader}", "Error", "{that}.options.testOpts.expected.textSelected"],
+                    spec: {priority: "last:testing"},
+                    event: "{selectionReader}.events.onError"
+                }, {
+                    func: "{tts}.applier.change",
+                    args: ["throwError", false]
+                }, {
                     // click play
                     jQueryTrigger: "click",
                     element: "{selectionReader}.control"
@@ -1291,11 +1318,12 @@ https://github.com/fluid-project/infusion/raw/master/Infusion-LICENSE.txt
                     spec: {priority: "last:testing", path: "play"},
                     changeEvent: "{selectionReader}.applier.modelChanged"
                 }, {
-                    // Collapse selection
-                    func: "fluid.tests.orator.selection.collapse"
+                    // Whitespace selection (NOTE: this will clear the selection and set the model.text path back to "")
+                    func: "fluid.tests.orator.selection.selectNode",
+                    args: ["{selectionReader}.dom.whitespaceText"]
                 }, {
                     listener: "fluid.tests.orator.verifySelectionState",
-                    args: ["{selectionReader}", "Selection Collapsed", "{that}.options.testOpts.expected.noSelection"],
+                    args: ["{selectionReader}", "Whitespace Selection", "{that}.options.testOpts.expected.whitespaceSelection"],
                     spec: {priority: "last:testing", path: "text"},
                     changeEvent: "{selectionReader}.applier.modelChanged"
                 }, {

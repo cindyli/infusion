@@ -426,8 +426,9 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             var trans = initTransaction ? initTransaction.transaction : that.applier.initiate();
             resourceMapEntry.listeners.forEach(function (oneListener) {
                 var innerValue = fluid.getImmediate(resourceSpec, oneListener.resourceSegs);
-                trans.change(oneListener.segs, null, "DELETE");
-                trans.change(oneListener.segs, innerValue);
+                var segs = oneListener.segs;
+                trans.change(segs, null, "DELETE");
+                trans.change(segs, innerValue);
             });
             if (!initTransaction) {
                 trans.commit();
@@ -443,7 +444,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         var byId = {};
         resourceMap.forEach(function (resourceMapEntry) {
             var resourceSpec = resourceMapEntry.fetchOne.resourceSpec;
-            var id = resourceSpec.transformEvent.id;
+            var id = resourceSpec.transformEvent.eventId;
             var existing = byId[id];
             if (!existing) {
                 existing = byId[id] = {
@@ -466,13 +467,13 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      */
     fluid.operateInitialTransaction = function (initModelTransaction, transId) {
         var transRec = fluid.getModelTransactionRec(fluid.rootComponent, transId);
-        var transac;
         var transacs = fluid.transform(initModelTransaction, function (recel) {
-            transac = recel.that.applier.initiate(null, "init", transId);
+            var transac = recel.that.applier.initiate(null, "init", transId);
+            // Note that here we (probably unnecessarily) trash any old transactions since all we are after is newHolder
             transRec[recel.that.applier.applierId] = {transaction: transac};
             // Also store it in the init transaction record so it can be easily globbed onto in applier.fireChangeRequest
             recel.transaction = transac;
-            return transac;
+            return recel.transaction;
         });
         // Compute the graph of init transaction relays for FLUID-6234 - one day we will have to do better than this, since there
         // may be finer structure than per-component - it may be that each piece of model area participates in this relation
@@ -494,34 +495,47 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         recs.sort(function (reca, recb) {
             return reca.initPriority - recb.initPriority;
         });
-        recs.forEach(function (recel) {
+        // Pass 1: Apply all raw new (initial) values to their respective models in the correct dependency order, before attempting to apply any
+        // relay rules in case these end up mutually overwriting (especially likely with freshly constructed lensed components)
+        recs.forEach(function applyInitialModelTransactionValues(recel) {
             var that = recel.that,
-                applier = that.applier,
+                applier = recel.that.applier,
                 transac = transacs[that.id];
             if (recel.completeOnInit) {
                 // Play the stabilised model value of previously complete components into the relay network
                 fluid.notifyModelChanges(applier.listeners.sortedListeners, "ADD", transac.oldHolder, fluid.emptyHolder, null, transac, applier, that);
+
             } else {
-                var resourceMapById = fluid.condenseResourceMap(applier.resourceMap);
-                fluid.each(resourceMapById, function (resourceMapEntry) {
-                    fluid.subscribeResourceModelUpdates(that, resourceMapEntry);
-                });
                 fluid.each(recel.initModels, function (oneInitModel) {
                     if (oneInitModel !== undefined) {
                         transac.fireChangeRequest({type: "ADD", segs: [], value: oneInitModel});
                     }
                     fluid.clearLinkCounts(transRec, true);
                 });
-                // Ensure that the model can be read as early as possible through non-model interactions resolved via {that}.model
-                that.model = transac.newHolder.model;
+            }
+        });
+        // Pass 2: Apply all relay rules and fetch any extra values resolved from resources whose values were themselves model-dependent
+        recs.forEach(function updateInitialModelTransactionRelays(recel) {
+            var that = recel.that,
+                applier = recel.that.applier,
+                transac = transacs[that.id];
+            applier.preCommit.fire(transac, that);
+            if (!recel.completeOnInit) {
+                var resourceMapById = fluid.condenseResourceMap(applier.resourceMap);
+                fluid.each(resourceMapById, function (resourceMapEntry) {
+                    fluid.subscribeResourceModelUpdates(that, resourceMapEntry);
+                });
+                // Repeatedly flush arrived values through relays to ensure that the rest of the model is maximally contextualised
+                applier.preCommit.fire(transac, that);
                 applier.earlyModelResolved.fire(that.model);
+                applier.preCommit.fire(transac, that);
                 // Note that if there is a further operateInitialTransaction for this same init transaction, next time we should treat it as stabilised
                 recel.completeOnInit = true;
-            }
-            var shadow = fluid.shadowForComponent(that);
-            if (shadow && !shadow.initTransactionId) { // Fix for FLUID-5869 - the component may have been destroyed during its own init transaction
-            // read in fluid.enlistModelComponent in order to compute the completeOnInit flag
-                shadow.initTransactionId = transId;
+                var shadow = fluid.shadowForComponent(that);
+                if (shadow && !shadow.initTransactionId) { // Fix for FLUID-5869 - the component may have been destroyed during its own init transaction
+                // read in fluid.enlistModelComponent in order to compute the completeOnInit flag
+                    shadow.initTransactionId = transId;
+                }
             }
         });
     };
@@ -764,9 +778,11 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                     fluid.popActivity();
                 } else {
                     if (changeRequest && changeRequest.type === "DELETE") {
-                        existing.transaction.fireChangeRequest({type: "DELETE", segs: targetSegs});
-                    }
-                    if (newValue !== undefined) {
+                        // Rebase the incoming DELETE with respect to this relay - whilst "newValue" is correct and we could honour this by
+                        // asking fluid.notifyModelChanges to decompose this into a DELETE plus ADD, this is more efficient
+                        var deleteSegs = targetSegs.concat(changeRequest.segs.slice(sourceSegs.length));
+                        existing.transaction.fireChangeRequest({type: "DELETE", segs: deleteSegs});
+                    } else if (newValue !== undefined) {
                         existing.transaction.fireChangeRequest({type: "ADD", segs: targetSegs, value: newValue});
                     }
                 }
@@ -1118,7 +1134,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
     fluid.model.commitRelays = function (instantiator, transactionId) {
         var transRec = instantiator.modelTransactions[transactionId];
         fluid.each(transRec, function (transEl) {
-        // EXPLAIN: This must commit ALL current transactions, not just those for relays - why?
+        // This commits all transactions, not just those for relay documents, because this is the main site where "newHolder" values for all transactions across the tree get updated
             if (transEl.transaction) { // some entries are links
                 transEl.transaction.commit("relay");
                 transEl.transaction.reset();
@@ -1188,22 +1204,15 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             while (fluid.model.updateRelays(instantiator, transaction.id) > 0) {} // eslint-disable-line no-empty
         }
 
-        function commitRelays(transaction, applier, code) {
-            if (code !== "relay") { // don't commit relays if this commit is already a relay commit
-                fluid.model.commitRelays(instantiator, transaction.id);
-            }
-        }
-
-        function concludeTransaction(transaction, applier, code) {
-            if (code !== "relay") {
-                fluid.concludeModelTransaction(transaction);
-            }
+        function commitRelays(transaction) {
+            fluid.model.commitRelays(instantiator, transaction.id);
         }
 
         applier.preCommit.addListener(updateRelays);
         applier.preCommit.addListener(commitRelays);
-        applier.postCommit.addListener(concludeTransaction);
-        applier.postCommit.addListener(fluid.concludeAnyTransaction);
+        applier.postCommit.addListener(fluid.concludeModelTransaction);
+        // Conclude any tree transaction that is in progress - i.e. close out the construction of any lensed components that were brought into existence by this model transaction
+        applier.postCommit.addListener(fluid.concludeAnyTreeTransaction);
 
         return null;
     };
@@ -1216,7 +1225,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         }
     };
 
-    fluid.constructLensedComponents = function (shadow, sourcesParsed, dynamicComponentKey) {
+    fluid.constructLensedComponents = function (shadow, initTransRec, sourcesParsed, dynamicComponentKey) {
         var lightMerge = shadow.lightMergeDynamicComponents[dynamicComponentKey];
         var sources = fluid.getImmediate(shadow.that.model, sourcesParsed.modelSegs);
         var shadowRecord = shadow.modelSourcedDynamicComponents[dynamicComponentKey];
@@ -1248,13 +1257,14 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             treeTransaction.initModelTransactionId = transId;
         }
         fluid.tryCatch(function () { // For FLUID-6195 ensure that exceptions during init relay don't leave the framework unusable
-            fluid.operateInitialTransaction(treeTransaction.initModelTransaction, transId);
+            var initModelTransaction = treeTransaction.initModelTransaction;
+            fluid.operateInitialTransaction(initModelTransaction, transId);
             // Do this afterwards so that model listeners can be fired by concludeComponentInit
             shadows.forEach(function (shadow) {
                 var that = shadow.that;
                 fluid.registerMergedModelListeners(that, that.options.modelListeners);
                 fluid.each(shadow.modelSourcedDynamicComponents, function (componentRecord, key) {
-                    fluid.constructLensedComponents(shadow, componentRecord.sourcesParsed, key);
+                    fluid.constructLensedComponents(shadow, initModelTransaction[that.id], componentRecord.sourcesParsed, key);
                 });
             });
         }, function (e) {
@@ -1325,9 +1335,27 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
             }
         },
         members: {
-            model: "@expand:fluid.initRelayModel({that}, {that}.modelRelay)",
-            applier: "@expand:fluid.makeHolderChangeApplier({that}, {that}.options.changeApplierOptions)",
-            modelRelay: "@expand:fluid.establishModelRelay({that}, {that}.options.model, {that}.options.modelListeners, {that}.options.modelRelay, {that}.applier)"
+            model: {
+                expander: {
+                    funcName: "fluid.initRelayModel",
+                    args: ["{that}", "{that}.modelRelay"],
+                    noproxy: true
+                }
+            },
+            applier: {
+                expander: {
+                    funcName: "fluid.makeHolderChangeApplier",
+                    args: ["{that}", "{that}.options.changeApplierOptions"],
+                    noproxy: true
+                }
+            },
+            modelRelay: {
+                expander: {
+                    funcName: "fluid.establishModelRelay",
+                    args: ["{that}", "{that}.options.model", "{that}.options.modelListeners", "{that}.options.modelRelay", "{that}.applier"],
+                    noproxy: true
+                }
+            }
         },
         mergePolicy: {
             model: {
@@ -1424,36 +1452,84 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
 
     /** CHANGE APPLIER **/
 
+    // supported, PUBLIC API function
+    /** Opens a transaction against the supplied applier, deletes the value at the supplied path, applies the supplied value in its place
+     * and commits the transaction. This is a useful method since the semantics of a ChangeApplier "ADD" message are accumulative - the
+     * supplied value is ordinarily merged into any existing value. By using this method, a client can wholly update a value held
+     * at a particular path, apparently atomically from the point of view of any model listeners.
+     * @param {fluid.ChangeApplier} applier - The ChangeApplier to operate the update
+     * @param {String|String[]} path - The path at which the new value is to be applied
+     * @param {Any} newValue - The new value to be stored at the path
+     * @return {Any} The updated contents of the entire model managed by the supplied applier
+     */
+    fluid.replaceModelValue = function (applier, path, newValue) {
+        var transaction = applier.initiate();
+        transaction.fireChangeRequest({path: path, type: "DELETE"});
+        transaction.fireChangeRequest({path: path, value: newValue});
+        transaction.commit();
+        return applier.holder.model;
+    };
+
     /* Dispatches a list of changes to the supplied applier */
+    // TODO: Good candidate for removal
     fluid.fireChanges = function (applier, changes) {
         for (var i = 0; i < changes.length; ++i) {
             applier.fireChangeRequest(changes[i]);
         }
     };
 
+    /*
+     * Utilities supporting fluid.model.applyHolderChangeRequest
+     */
+
+    /** Given a changeMap structure and an array of paths into it, returns the change type found along that path,
+     * or `null` if the path is unchanged
+     * @param {ChangeMap} changeMap - A "ChangeMap" structure isomorphic to the model, holding "ADD" or "DELETE" at the highest
+     * path where such a change has been received
+     * @param {String[]} segs - Array of path segments into the structure
+     * @return {("ADD"|"DELETE"|Null)} Returns "ADD" or "DELETE" if such a change is found along the supplied path, otherwise `null`.
+     */
     fluid.model.isChangedPath = function (changeMap, segs) {
         for (var i = 0; i <= segs.length; ++i) {
             if (typeof(changeMap) === "string") {
-                return true;
+                return changeMap;
             }
             if (i < segs.length && changeMap) {
                 changeMap = changeMap[segs[i]];
             }
         }
-        return false;
+        return null;
     };
 
+    /** Updates both the "changeMap" and "deltaMap" to map the type of a ChangeRequest received at a particular path
+     * @param {Object} options - An options structure with members `changeMap` and `deltaMap` which will both be updated
+     * in order to take account of the incoming ChangeRequest type and path
+     * @param {String[]} segs - An array of path segments at which a change has been received
+     * @param {("ADD"|"DELETE")} value - A string holding the ChangeRequest type
+     */
     fluid.model.setChangedPath = function (options, segs, value) {
         var notePath = function (record) {
+            var root = options;
             segs.unshift(record);
-            fluid.model.setSimple(options, segs, value);
+            // We can't use any of the standard drivers here since we i) need to create entries along as we go, like set, but
+            // ii) not attempt to set any properties on a primitive value if we find it
+            for (var i = 0; i < segs.length - 1; ++i) {
+                var seg = segs[i];
+                if (root[seg] === undefined) {
+                    root[seg] = {};
+                }
+                root = root[seg];
+            }
+            if (fluid.isPlainObject(root)) {
+                root[fluid.peek(segs)] = value;
+            }
             segs.shift();
         };
-        if (!fluid.model.isChangedPath(options.changeMap, segs)) {
+        if (fluid.model.isChangedPath(options.changeMap, segs) !== value) {
             ++options.changes;
             notePath("changeMap");
         }
-        if (!fluid.model.isChangedPath(options.deltaMap, segs)) {
+        if (fluid.model.isChangedPath(options.deltaMap, segs) !== value) {
             ++options.deltas;
             notePath("deltaMap");
         }
@@ -1531,9 +1607,18 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         return options;
     };
 
-    // Changes: "MERGE" action abolished
-    // ADD/DELETE at root can be destructive
-    // changes tracked in optional final argument holding "changeMap: {}, changes: 0, unchanged: 0"
+    /** Central point where a ChangeRequest is applied to a model. This keeps records of which parts of the model has been
+     * invalidated both on a fine scale ("deltaMap", used for individual changes for the operation of every relay) and
+     * a coarse scale ("changeMap", used to track the overall state of the model across the whole transaction.
+     * @param {Any} holder - The object holding the model at member `model` - may be a Fluid component or a temporary structure
+     * created during a transaction
+     * @param {ChangeRequest} request - The ChangeRequest to be applied
+     * @param {Object} options - Options governing the changeApplication process. This may include members:
+     *     {ChangeMap} [changeMap, deltaMap] - Optional ChangeMap structures mapping updates to the model (see `fluid.model.setChangedPath`)
+     *     {Integer} changes, delta - Counts (pretty notional, the only real use made at present is to check whether they are 0) of updates made to the model
+     *     {Boolean} inverse - Whether the change is being applied or unapplied to the model (only used by the `fluid.model.diff` driver)
+     * @return {ChangeMap} The updated `deltaMap` if one was supplied in options
+     */
     fluid.model.applyHolderChangeRequest = function (holder, request, options) {
         options = fluid.model.defaultAccessorConfig(options);
         options.deltaMap = options.changeMap ? {} : null;
@@ -1543,7 +1628,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         if (atRoot) {
             pen = {root: holder, last: "model"};
         } else {
-            if (!holder.model) {
+            if (!holder.model && request.type !== "DELETE") {
                 holder.model = {};
                 fluid.model.setChangedPath(options, [], options.inverse ? "DELETE" : "ADD");
             }
@@ -1566,10 +1651,12 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         return options.deltas ? options.deltaMap : null;
     };
 
+    // TODO: This algorithm is quite inefficient in that both models will be copied once each
+    // supported, PUBLIC API function
     /** Compare two models for equality using a deep algorithm. It is assumed that both models are JSON-equivalent and do
      * not contain circular links.
-     * @param modela The first model to be compared
-     * @param modelb The second model to be compared
+     * @param {Any} modela The first model to be compared
+     * @param {Any} modelb The second model to be compared
      * @param {Object} options - If supplied, will receive a map and summary of the change content between the objects. Structure is:
      *     changeMap: {Object/String} An isomorphic map of the object structures to values "ADD" or "DELETE" indicating
      * that values have been added/removed at that location. Note that in the case the object structure differs at the root, <code>changeMap</code> will hold
@@ -1577,10 +1664,8 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      *     changes: {Integer} Counts the number of changes between the objects - The two objects are identical iff <code>changes === 0</code>.
      *     unchanged: {Integer} Counts the number of leaf (primitive) values at which the two objects are identical. Note that the current implementation will
      * double-count, this summary should be considered indicative rather than precise.
-     * @return <code>true</code> if the models are identical
+     * @return {Boolean} `true` if the models are identical
      */
-    // TODO: This algorithm is quite inefficient in that both models will be copied once each
-    // supported, PUBLIC API function
     fluid.model.diff = function (modela, modelb, options) {
         options = options || {changes: 0, unchanged: 0, changeMap: {}}; // current algorithm can't avoid the expense of changeMap
         var typea = fluid.typeCode(modela);
@@ -1593,15 +1678,17 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         } else {
             // Apply both forward and reverse changes - if no changes either way, models are identical
             // "ADD" reported in the reverse direction must be accounted as a "DELETE"
-            var holdera = {
-                model: fluid.copy(modela)
-            };
-            fluid.model.applyHolderChangeRequest(holdera, {value: modelb, segs: [], type: "ADD"}, options);
             var holderb = {
                 model: fluid.copy(modelb)
             };
             options.inverse = true;
             fluid.model.applyHolderChangeRequest(holderb, {value: modela, segs: [], type: "ADD"}, options);
+            var holdera = {
+                model: fluid.copy(modela)
+            };
+            options.inverse = false;
+            fluid.model.applyHolderChangeRequest(holdera, {value: modelb, segs: [], type: "ADD"}, options);
+
             togo = options.changes === 0;
         }
         if (togo === false && options.changes === 0) { // catch all primitive cases
@@ -1747,13 +1834,8 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         };
     };
 
-    // Quick n dirty test to cheaply detect Object versus other JSON types
-    fluid.isObjectSimple = function (totest) {
-        return Object.prototype.toString.call(totest) === "[object Object]";
-    };
-
     fluid.mergeChangeSources = function (target, globalSources) {
-        if (fluid.isObjectSimple(globalSources)) { // TODO: No test for this branch!
+        if (fluid.isPlainObject(globalSources, true)) { // TODO: No test for this branch!
             fluid.extend(target, globalSources);
         } else {
             fluid.each(fluid.makeArray(globalSources), function (globalSource) {
@@ -1762,8 +1844,55 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         }
     };
 
+    // Notes on compound/composite transactions:
+    // Ever since the now long-standing model relay system was implemented for FLUID-5024 round about 2014, it has been
+    // recognised that model transactions need to be "composite" across the entire component tree. That is, all the parts
+    // of models touched by a network of relays across the tree need to be committed apparently (from the point of view of
+    // ModelListeners) atomically. This poses an odd design risk for the apparently programmatic ChangeApplier API which
+    // appears to promise to allow the user to commit an "individual" transaction using var trans = that.initiate();
+    // followed by trans.commit().
+    // This implies that hidden behind "trans.commit" needs to be the entire machinery to commit the transaction across the
+    // tree - and since this itself is compound, the coordination for the sub-steps of this operation including the
+    // so-called and malignantly named "half-transactional system" that governs relays.
+    // What is meant by "half-transactional"? What it means is that the data structures (newHolder + oldHolder) used to
+    // track updates through a transaction are somewhat abused as relay documents themselves are models and need to be
+    // updated apparently atomically, and BEFORE they are called upon to operate. Updates to model relay documents themselves
+    // need to be atomic since a partially updated relay document will be corrupt and do something malignant to the surrounding
+    // models. As a result, transactions have a special method "reset" which is used to mark such "pauses" partway through the
+    // overall transaction, resetting the transaction to its original state but not closing it out completely in the expectation
+    // that further updates may pass through as updates continue to slosh around the tree.
+    // This all occurs in the preCommit/postCommit hooks added to each individual transaction's events. We do not attempt
+    // to update any relay documents or indeed anything other than "newHolder" in each isolated transaction until a
+    // commit is actually requested via trans.commit(). Then all hell breaks loose - The workflow is as follows:
+    // i) preCommit for the transaction operates
+    //    a) updateRelays operates across the entire tree, expecting that all changes have been maximally relayed into relay
+    //       documents - it operates them, thus relaying any updates across their sources/targets to each other
+    //    b) commitRelays operates across the entire tree - committing every relay document, but also taking the time to commit
+    //       every ordinary transaction participant too (giving rise to the perplexing comment that stood in
+    //       fluid.model.commitRelays for 6 years)
+    //           The result of b) would ordinarily re-initiate this ENTIRE process across the tree again were it not for the
+    //           special argument "relay" provided which then aborts the elements of the sub-workflow when it is detected.
+    //           This is a nutty system which should be refactored to move all of the machinery onto a first-class cross-tree
+    //           "transaction" object which at present is just a dumb data structure held in instantiator.modelTransactions.
+    // ii) commit for the transaction operates - but note that because of i) b) we actually expect this to be a no-op since
+    //     it has already committed!
+    // iii) postCommit hooks then
+    //    a) notifyExternal notifies modelListeners around the skeleton in priority order
+    //    b) concludeAnyTreeTransaction concludes any component tree transaction that arose through lensed construction and
+    //       destruction of components
+
+    // Prototype for ChangeApplier so it is recognisable as "exotic" by cloning algorithms
     fluid.ChangeApplier = function () {};
 
+    /** Main construction point for ChangeApplier. Named "holder" since it attaches to its target model at one higher level of
+     * containment, in order to allow operating on models which consist entirely of primitive values or "undefined" - this containing
+     * object is named its "holder", whose member "model" holds the model. The "holder" is ordinarily a component but the implementation
+     * (just barely) supports the use of isolated ChangeAppliers and models (this technique is still used in the Model Transformation system
+     * to construct the applier governing its output document)
+     * @param {Component|Object} holder - The "holder" for the model to be managed by the ChangeApplier. This may be a Component or else (exceptionally) a plain object expecting a model in a member named "model"
+     * @param {Object} options - (optional) Options governing the ChangeApplier. Primarily resolverSetConfig and resolverGetConfig which should not need to be configured.
+     * @return {fluid.ChangeApplier} - The constructed ChangeApplier.
+     */
     fluid.makeHolderChangeApplier = function (holder, options) {
         options = fluid.model.defaultAccessorConfig(options);
         var applierId = fluid.allocateGuid();
@@ -1873,13 +2002,15 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
                  * @param {String} [code] - Optional, internal use argument indicating the purpose of the commit. Can take the value "relay".
                  */
                 commit: function (code) {
-                    that.preCommit.fire(trans, that, code);
+                    if (code !== "relay") {
+                        that.preCommit.fire(trans, that, code);
+                    }
                     if (trans.changeRecord.changes > 0) {
                         var oldHolder = {model: holder.model};
                         holder.model = trans.newHolder.model;
                         fluid.notifyModelChanges(that.transListeners.sortedListeners, trans.changeRecord.changeMap, holder, oldHolder, null, trans, that, holder);
                     }
-                    if (!defeatPost) {
+                    if (!defeatPost && code !== "relay") {
                         that.postCommit.fire(trans, that, code);
                     }
                 },
