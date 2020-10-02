@@ -79,11 +79,21 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      *          placed in the directModel.
      */
     fluid.defaults("fluid.dataSource", {
-        gradeNames: ["fluid.component"],
+        gradeNames: ["fluid.component", "fluid.contextAware"],
+        contextAwareness: {
+            writable: {
+                checks: {
+                    writableValue: {
+                        contextValue: "{fluid.dataSource}.options.writable",
+                        gradeNames: "{fluid.dataSource}.options.writableGrade"
+                    }
+                }
+            }
+        },
+        writable: false,
         events: {
             // The "onRead" event is operated in a custom workflow by fluid.fireTransformEvent to
-            // process dataSource payloads during the get process. Each listener
-            // receives the data returned by the last.
+            // process dataSource payloads during the get process. Each listener receives the data returned by the last.
             onRead: null,
             onError: null
         },
@@ -107,24 +117,22 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         invokers: {
             get: {
                 funcName: "fluid.dataSource.get",
-                args: ["{that}", "{arguments}.0", "{arguments}.1"] // directModel, options/callback
+                args: ["{that}", "{arguments}.0", "{arguments}.1"] // directModel, directOptions
             }
         }
     });
 
 
     /**
-     * Base grade for adding write configuration to a dataSource.
-     *
-     * Grade linkage should be used to apply the concrete writable grade to the datasource configuration.
-     * For example fluid.makeGradeLinkage("kettle.dataSource.CouchDB.linkage", ["fluid.dataSource.writable", "kettle.dataSource.CouchDB"], "kettle.dataSource.CouchDB.writable");
+     * Base grade for adding write configuration to a dataSource. Because of issues like FLUID-5800, this is a pure
+     * mixin grade. The related writable grade to a concrete DataSource grade is listed in its "writableGrade" options,
+     * which response to the "writable: true" option via ContextAwareness.
      */
     fluid.defaults("fluid.dataSource.writable", {
         gradeNames: ["fluid.component"],
         events: {
             // events "onWrite" and "onWriteResponse" are operated in a custom workflow by fluid.fireTransformEvent to
-            // process dataSource payloads during the set process. Each listener
-            // receives the data returned by the last.
+            // process dataSource payloads during the set process. Each listener receives the data returned by the last.
             onWrite: null,
             onWriteResponse: null
         },
@@ -144,7 +152,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         invokers: {
             set: {
                 funcName: "fluid.dataSource.set",
-                args: ["{that}", "{arguments}.0", "{arguments}.1", "{arguments}.2"] // directModel, model, options/callback
+                args: ["{that}", "{arguments}.0", "{arguments}.1", "{arguments}.2"] // directModel, model, directOptions
             }
         }
     });
@@ -154,13 +162,14 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
     // ii) if the user has supplied an onError handler in method `options`, this is registered - otherwise
     // we register the firer of the dataSource's own onError method.
 
-    fluid.dataSource.registerStandardPromiseHandlers = function (that, promise, options) {
-        promise.then(typeof(options) === "function" ? options : null,
-            options.onError ? options.onError : that.events.onError.fire);
+    fluid.dataSource.registerStandardPromiseHandlers = function (that, promise, requestOptions) {
+        promise.then(requestOptions.callback, requestOptions.onError ? requestOptions.onError : that.events.onError.fire);
     };
 
-    fluid.dataSource.defaultiseOptions = function (componentOptions, options, directModel, isSet) {
-        options = fluid.copy(options) || {};
+    fluid.dataSource.defaultiseOptions = function (componentOptions, directOptions, directModel, isSet) {
+        var options = typeof(directOptions) === "function" ? {
+            callback: directOptions
+        } : fluid.copy(directOptions) || {};
         options.directModel = directModel;
         options.operation = isSet ? "set" : "get";
         options.notFoundIsEmpty = options.notFoundIsEmpty || componentOptions.notFoundIsEmpty;
@@ -171,13 +180,13 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      *  which then proceeds through the transform chain to arrive at the final payload.
      * @param {fluid.dataSource} that - The dataSource itself
      * @param {Object} [directModel] - The direct model expressing the "coordinates" of the model to be fetched
-     * @param {Object} options - A structure of options configuring the action of this get request - many of these will be specific to the particular concrete DataSource
+     * @param {Object|Function} [directOptions] - A success callback, or a structure of options configuring the action of this get request,  - many of these will be specific to the particular concrete DataSource
      * @return {Promise} A promise for the final resolved payload
      */
-    fluid.dataSource.get = function (that, directModel, options) {
-        options = fluid.dataSource.defaultiseOptions(that.options, options, directModel);
-        var promise = fluid.promise.fireTransformEvent(that.events.onRead, undefined, options);
-        fluid.dataSource.registerStandardPromiseHandlers(that, promise, options);
+    fluid.dataSource.get = function (that, directModel, directOptions) {
+        var requestOptions = fluid.dataSource.defaultiseOptions(that.options, directOptions, directModel);
+        var promise = fluid.promise.fireTransformEvent(that.events.onRead, undefined, requestOptions);
+        fluid.dataSource.registerStandardPromiseHandlers(that, promise, requestOptions);
         return promise;
     };
 
@@ -187,21 +196,21 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      * @param {fluid.dataSource} that - The dataSource itself
      * @param {Object} [directModel] - The direct model expressing the "coordinates" of the model to be written
      * @param {Any} model - The payload to be written to the dataSource
-     * @param {Object} [options] - A structure of options configuring the action of this set request - many of these will be specific to the particular concrete DataSource
+     * @param {Object|Function} [directOptions] - A success callback, or a structure of options configuring the action of this set request - many of these will be specific to the particular concrete DataSource
      * @return {Promise} A promise for the final resolved payload (not all DataSources will provide any for a `set` method)
      */
-    fluid.dataSource.set = function (that, directModel, model, options) {
-        options = fluid.dataSource.defaultiseOptions(that.options, options, directModel, true); // shared and writeable between all participants
-        var transformPromise = fluid.promise.fireTransformEvent(that.events.onWrite, model, options);
+    fluid.dataSource.set = function (that, directModel, model, directOptions) {
+        var requestOptions = fluid.dataSource.defaultiseOptions(that.options, directOptions, directModel, true); // shared and writeable between all participants
+        var transformPromise = fluid.promise.fireTransformEvent(that.events.onWrite, model, requestOptions);
         var togo = fluid.promise();
         transformPromise.then(function (setResponse) {
-            var options2 = fluid.dataSource.defaultiseOptions(that.options, fluid.copy(options), directModel);
+            var options2 = fluid.dataSource.defaultiseOptions(that.options, fluid.copy(requestOptions), directModel);
             var retransformed = fluid.promise.fireTransformEvent(that.events.onWriteResponse, setResponse, options2);
             fluid.promise.follow(retransformed, togo);
         }, function (error) {
             togo.reject(error);
         });
-        fluid.dataSource.registerStandardPromiseHandlers(that, togo, options);
+        fluid.dataSource.registerStandardPromiseHandlers(that, togo, requestOptions);
         return togo;
     };
 
@@ -210,16 +219,19 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
 
     fluid.defaults("fluid.dataSource.URL", {
         gradeNames: ["fluid.dataSource"],
-        readOnlyGrade: "fluid.dataSource.URL",
+        writableGrade: "fluid.dataSource.URL.writable",
         invokers: {
-            resolveUrl: "fluid.dataSource.URL.resolveUrl" // url, termMap, directModel, noencode
+            resolveUrl: "fluid.dataSource.URL.resolveUrl", // url, termMap, directModel, noencode
+            handleHttp: "fluid.dataSource.URL.handleHttp" // that, options, model
         },
         listeners: {
             "onRead.impl": {
                 funcName: "fluid.dataSource.URL.handle",
-                args: ["{that}", "{arguments}.0", "{arguments}.1"] // options, directModel
+                args: ["{that}", "{that}.options.permittedRequestOptions", "{arguments}.0", "{arguments}.1"] // [model], options
             }
         },
+        // Global name of an array of permitted requestOptions
+        permittedRequestOptions: "fluid.dataSource.URL.requestOptions",
         components: {
             cookieJar: "{cookieJar}"
         },
@@ -231,7 +243,7 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         listeners: {
             "onWrite.impl": {
                 funcName: "fluid.dataSource.URL.handle",
-                args: ["{that}", "{arguments}.0", "{arguments}.1", "{arguments}.2"] // options, directModel, model
+                args: ["{that}", "{that}.options.permittedRequestOptions", "{arguments}.0", "{arguments}.1"] // model, options
             }
         }
     });
@@ -268,10 +280,25 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
         return replaced;
     };
 
-    fluid.dataSource.URL.urlFields = fluid.freezeRecursive(["protocol", "auth", "hostname", "port", "pathname", "search"]);
+    fluid.dataSource.URL.urlFields = fluid.freezeRecursive(["protocol", "username", "password", "hostname", "port", "pathname", "search"]);
+
+    /** Condenses a plain JSON object with the isomorphic format to a WhatWG URL object into an actual WhatWG URL object - this
+     * object can then be rendered into a string via URL.toString().
+     * @param {Object} requestOptions - A plain JSON object isomorphic to a URL - this may contain extra fields
+     * @return {URL} The equivalent URL object
+     */
+    fluid.dataSource.URL.condenseUrl = function (requestOptions) {
+        var togo = new fluid.resourceLoader.UrlClass("http://localhost/");
+        fluid.dataSource.URL.urlFields.forEach(function (field) {
+            if (requestOptions[field]) {
+                togo[field] = requestOptions[field];
+            }
+        });
+        return togo;
+    };
 
     fluid.dataSource.URL.requestOptions = fluid.dataSource.URL.urlFields.concat(
-        ["url", "host", "localAddress", "socketPath", "method", "headers", "agent", "termMap"]);
+        ["url", "method", "headers", "termMap"]);
 
     // TODO: Deal with the anomalous status of "charEncoding" - in theory it could be set per-request but currently can't be. Currently all
     // "requestOptions" have a common fate in that they end up as the arguments to http.request. We need to split these into two levels,
@@ -282,19 +309,19 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      * reformed as a proper merge pipeline.
      */
 
-    fluid.dataSource.URL.prepareRequestOptions = function (componentOptions, cookieJar, userOptions, permittedOptions, directModel, userStaticOptions, resolveUrl) {
+    fluid.dataSource.URL.prepareRequestOptions = function (componentOptions, cookieJar, userOptions, permittedOptions, directModel, userStaticOptions) {
         var staticOptions = fluid.filterKeys(componentOptions, permittedOptions);
         var requestOptions = fluid.extend(true, {headers: {}}, userStaticOptions, staticOptions, userOptions);
         // GPII-2147: replace "localhost" with "127.0.0.1" to allow running without a network connection in windows
-        // Only do this on node.js! On the browser it will cause an XHR status 0 failure
-        // if (requestOptions.hostname === "localhost" || requestOptions.host === "localhost") {
-        //    requestOptions = fluid.extend(requestOptions, { hostname: "127.0.0.1", host: "127.0.0.1" });
-        //}
-        var termMap = fluid.transform(requestOptions.termMap, encodeURIComponent);
+        if (fluid.contextAware.isNode()) { // only do this in node, in the browser it results in an XHR status 0
+            if (requestOptions.hostname === "localhost") {
+                requestOptions.hostname = "127.0.0.1";
+            }
+        }
+        requestOptions.writeMethod = requestOptions.writeMethod || componentOptions.writeMethod || "PUT";
+        // TODO: do the same for "search" too?
+        requestOptions.pathname = fluid.dataSource.URL.resolveUrl(requestOptions.pathname, requestOptions.termMap, directModel);
 
-        requestOptions.path = (resolveUrl || fluid.dataSource.URL.resolveUrl)(requestOptions.path, requestOptions.termMap, directModel);
-
-        fluid.stringTemplate(requestOptions.path, termMap);
         if (cookieJar && cookieJar.cookie && componentOptions.storeCookies) {
             requestOptions.headers.Cookie = cookieJar.cookie;
         }
@@ -315,33 +342,33 @@ var fluid_3_0_0 = fluid_3_0_0 || {};
      * @param {kettle.dataSource.urlResolver} that - A URLResolver that will convert the contents of the
      * <code>directModel</code> supplied as the 3rd argument into a concrete URL used for this
      * HTTP request.
-     * @param {Object} userOptions - An options block that encodes:
+     * @param {String} permittedRequestOptions - The global name of an array holding the list of permitted request options
+     * @param {Object} [model] - [optional] the payload to be written by this write operation
+     * @param {RequestOptions} userOptions - A structure of request-specific options, including:
+     *     @param {Object}  userOptions.directModel - a model holding the coordinates of the data to be read or written
      *     @param {String}  userOptions.operation - "set"/"get"
      *     @param {Boolean} userOptions.notFoundIsEmpty - <code>true</code> if a missing file on read should count as a successful empty payload rather than a rejection
      *     writeMethod {String}: "PUT"/ "POST" (option - if not provided will be defaulted by the concrete dataSource implementation)
-     * @param {Object} directModel - a model holding the coordinates of the data to be read or written
-     * @param {Object} [model] - [optional] the payload to be written by this write operation
      * @return {Promise} a promise for the successful or failed datasource operation
      */
-    fluid.dataSource.URL.handle = function (that, userOptions, directModel, model) {
-        // TODO: Most of these options are not permitted on the client
-        var permittedOptions = fluid.dataSource.URL.requestOptions;
+    fluid.dataSource.URL.handle = function (that, permittedRequestOptions, model, userOptions) {
+        var permittedOptions = fluid.getGlobalValue(permittedRequestOptions);
         // TODO: Permit this component to be used during the I/O phase of tree startup - remove after FLUID-6372
         permittedOptions.forEach(function (oneOption) {
             fluid.getForComponent(that, ["options", oneOption]);
         });
-        fluid.getForComponent(that, "resolveUrl");
+        var directModel = userOptions.directModel;
         var url = that.resolveUrl(that.options.url, that.options.termMap, directModel);
-        var parsed = fluid.filterKeys(new fluid.resourceLoader.UrlClass(url, window.location), fluid.dataSource.URL.urlFields);
+        var parsed = fluid.filterKeys(new fluid.resourceLoader.UrlClass(url, window && window.location), fluid.dataSource.URL.urlFields);
         permittedOptions.forEach(function (oneOption) {
         // The WhatWG algorithm is a big step backwards and produces empty string junk in the parsed URL
             if (!parsed[oneOption]) {
                 delete parsed[oneOption];
             }
         });
-        var requestOptions = fluid.dataSource.URL.prepareRequestOptions(that.options, that.cookieJar, userOptions, permittedOptions, directModel, parsed);
+        var finalRequestOptions = fluid.dataSource.URL.prepareRequestOptions(that.options, that.cookieJar, userOptions, permittedOptions, directModel, parsed, that.resolveUrl);
 
-        return fluid.dataSource.URL.handle.http(that, requestOptions, model);
+        return that.handleHttp(that, finalRequestOptions, model);
     };
 
     /** After express 4.15.0 of 2017-03-01 error messages are packaged as HTML readable
