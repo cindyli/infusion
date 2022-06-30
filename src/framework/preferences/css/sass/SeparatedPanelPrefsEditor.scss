@@ -27,133 +27,107 @@ body {
 
 // Top bar and show/hide button
 .fl-prefsEditor-separatedPanel {
-    border-bottom: 1px solid var(--fl-fgColor, #ccc);
     display: flex;
     flex-direction: column;
     font-size: 1rem;
-    line-height: 0;
-
-    .fl-panelBar {
-        background-color: var(--fl-bgColor, #fff);
-        box-shadow: 0 2px 3px 0 var(--fl-fgColor, #6f6f6f);
-        color: var(--fl-fgColor);
-        width: 100%;
-
-        // panelBar for desktop view
-        &.fl-panelBar-wideScreen {
-            display: none;
-        }
-
-        .fl-prefsEditor-buttons {
-            align-items: center;
-            display: flex;
-            flex-wrap: nowrap;
-            height: 66px; // fixed height so the buttons won't push down the sliding panel as the text size is changed
-            justify-content: space-between;
-            line-height: 1; // fixed line height so it doesn't scale with the Preferences Editor line space scaling.
-            width: 100%;
-        }
-    }
-
-    .fl-prefsEditor-showHide,
-    .fl-prefsEditor-reset {
-        background-color: var(--fl-buttonBgColor, #fff);
-        border: none;
-        color: var(--fl-buttonFgColor, #2f2b2a);
-        font-family: var(--fl-font-family, OpenSans, "Myriad Pro", Helvetica, Arial, sans-serif);
-        font-size: calc(var(--fl-enhance-font-size-factor, 1) * var(--fl-textSize, 1rem) * 1.3);
-        letter-spacing: var(--fl-letterSpace);
-        overflow: hidden;
-        padding: 0;
-        text-align: center;
-        text-overflow: ellipsis;
-        text-transform: lowercase;
-        white-space: nowrap;
-        word-spacing: var(--fl-wordSpace);
-    }
 
     .fl-prefsEditor-showHide {
-        flex-grow: 1;
-        flex-shrink: 2;
-        padding-left: 16px; // fixed padding to save space on mobile when text size adjustments are applied
-        text-align: left;
+        background-color: var(--fl-bgColor, #fff);
+        border: none;
+        border-radius: 0 0 10px 10px;
+        box-shadow: 0 0 4px rgba(0, 0, 0, 0.25);
+        color: var(--fl-fgColor);
+        display: grid;
+        margin-right: 1rem;
+        padding: 0;
+        position: fixed;
+        right: 0;
+        top: 0;
+        z-index: 9999;
+
+        .fl-slidingPanel-arrow {
+            align-self: center;
+            grid-area: 2 / 1 / 3 / 2;
+            margin: 0.2rem;
+
+            &::before {
+                content: "\142f";
+            }
+        }
+
+        .fl-slidingPanel-text {
+            align-items: center;
+            background-color: var(--fl-buttonBgColor, #404040);
+            color: var(--fl-fgColor, #fff);
+            display: flex;
+            flex-direction: column;
+            grid-area: 1 / 1 / 2 / 2;
+            height: 5rem;
+            justify-content: space-around;
+            width: 6rem;
+        }
     }
 
-    .fl-prefsEditor-reset {
-        border-left: 2px solid var(--fl-fgColor, #ccc);
-        flex-shrink: 1;
-        padding-right: 16px; // fixed padding to save space on mobile when text size adjustments are applied
-    }
+    &.fl-prefsEditor-separatedPanel-expanded {
+        .fl-prefsEditor-showHide {
+            border-radius: 0;
+            display: block;
+            margin: 0;
+            position: initial;
+            width: 100%;
 
-    // Font icon for reset tab
-    .fl-icon-undo {
-        font-family: $icon-font;
-        font-size: 1.2em;
-        -webkit-font-smoothing: antialiased;
-        font-style: normal;
-        font-variant: normal;
-        font-weight: normal;
-        text-transform: none;
-    }
+            .fl-slidingPanel-arrow::before {
+                content: "\1431";
+            }
 
-    .fl-icon-undo::before {
-        content: "\e008";
+            .fl-slidingPanel-text {
+                display: none;
+            }
+        }
     }
 
     // large screen / desktop view
     @media screen and (min-width: 40em) {
-        display: block;
-
-        .fl-panelBar {
-            box-shadow: none;
-            font-size: 1rem;
-
-            // panelBar for mobile view
-            &.fl-panelBar-smallScreen {
-                display: none;
-            }
-
-            // panelBar for desktop view
-            &.fl-panelBar-wideScreen {
-                display: block;
-            }
-
-            .fl-prefsEditor-buttons {
-                background-color: var(--fl-buttonBgColor, #fff);
-                border: 1px solid var(--fl-fgColor, #ccc);
-                border-bottom-left-radius: 8px;
-                border-bottom-right-radius: 8px;
-                border-top: none;
-                box-shadow: 2px 2px 3px 0 var(--fl-fgColor, #6f6f6f);
-                display: block;
-                float: right;
-                height: auto;
-                margin-right: 5%;
-                min-height: 2em;
-                width: auto;
-
-                [class*="fl-theme"]:not(.fl-theme-prefsEditor-default) & {
-                    box-shadow: none;
-                }
-            }
-        }
-
-        .fl-prefsEditor-showHide,
-        .fl-prefsEditor-reset {
-            border: none;
-            font-size: calc(var(--fl-enhance-font-size-factor, 1) * var(--fl-textSize, 1rem) * 1.1);
-            font-weight: bold;
-            min-height: 1.8em;
-            padding: 0;
-        }
+        flex-direction: row;
+        height: 100%;
+        position: fixed;
+        right: 0;
+        top: 0;
 
         .fl-prefsEditor-showHide {
-            margin: 0 0.5em;
+            box-shadow: none;
+            float: right;
+            font-size: 1rem;
+
+            .fl-slidingPanel-arrow {
+                border-radius: 10px 0 0 10px;
+                grid-area: 1 / 1 / 2 / 2;
+                width: 1rem;
+
+                &::before {
+                    content: "\1438";
+                }
+            }
+
+            .fl-slidingPanel-text {
+                grid-area: 1 / 2 / 2 / 3;
+            }
         }
 
-        .fl-prefsEditor-reset {
-            margin-right: 0.5em;
-            padding-left: 0.8em;
+        &.fl-prefsEditor-separatedPanel-expanded {
+            .fl-prefsEditor-showHide {
+                border-radius: 10px 0 0 10px;
+                height: 4rem;
+                width: 1rem;
+
+                .fl-slidingPanel-arrow::before {
+                    content: "\1433";
+                }
+            }
+
+            .fl-prefsEditor-iframe {
+                overflow-y: scroll;
+            }
         }
     }
 }

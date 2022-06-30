@@ -68,8 +68,8 @@
         <script src="../../src/framework/preferences/js/Builder.js"></script>
         <script src="../../src/components/uiOptions/js/UIOptions.js"></script>
 
-        <script src="../../src/components/overviewPanel/js/OverviewPanel.js"></script>
-        <script src="../shared/js/overviewWrapper.js"></script>
+        <!-- <script src="../../src/components/overviewPanel/js/OverviewPanel.js"></script>
+        <script src="../shared/js/overviewWrapper.js"></script> -->
     </head>
 
     <body class="prefsEditor-demo-theme fl-focus">
@@ -95,16 +95,37 @@
                         lazyLoad: true
                     }
                 });
+
+                // When "user preferences" button is clicked, toggle the expanded css selector
+                document.getElementsByClassName("flc-slidingPanel-toggleButton")[0].addEventListener("click", () => {
+                    document.getElementsByClassName("flc-prefsEditor-separatedPanel")[0].classList.toggle("fl-prefsEditor-separatedPanel-expanded");
+                });
             });
         </script>
 
-        <section class="flc-overviewPanel fl-overviewPanel-container"></section>
+        <!-- <section class="flc-overviewPanel fl-overviewPanel-container"></section> -->
+
         <!-- BEGIN markup for Preference Editor -->
         <div class="flc-prefsEditor-separatedPanel fl-prefsEditor-separatedPanel">
-            <!--
-                This div is for the sliding panel bar that shows and hides the Preference Editor controls in the mobile view.
-                A separate panel bar for mobile displays is needed to preserver the correct tab order.
-            -->
+            <button class="flc-slidingPanel-toggleButton fl-prefsEditor-showHide">
+                <span class="fl-slidingPanel-arrow"></span>
+                <span class="fl-slidingPanel-text">
+                    <svg width="32" height="39" viewBox="0 0 32 39" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M22.5101 27.0234C22.4691 26.9299 22.4245 26.8372 22.3765 26.7453C22.0511 26.1072 21.6316 25.5216 21.1322 25.0081C21.4236 24.4338 21.7154 23.857 22.0077 23.2777C21.3304 22.6624 20.57 22.1966 19.7598 21.7935C19.3386 22.2901 18.9477 22.8002 18.5567 23.3141C18.4397 23.2697 18.3221 23.2279 18.2021 23.191C17.501 22.963 16.7689 22.8449 16.0317 22.8408C15.8458 22.2636 15.6594 21.686 15.4727 21.108C15.4382 20.9997 15.4369 20.996 15.3249 21.0016C14.9514 21.0167 14.5803 21.0678 14.2166 21.1542C14.1446 21.1726 14.0719 21.1923 13.9987 21.2046C13.6253 21.2677 13.2609 21.3753 12.9132 21.5252C12.7981 21.5751 12.798 21.5751 12.8134 21.6963L13.0332 23.4808C12.9329 23.5263 12.8338 23.5743 12.7346 23.6248C12.0821 23.957 11.4845 24.3875 10.9626 24.901C10.3882 24.5977 9.8156 24.2937 9.22637 24.01C9.06075 24.2131 8.8982 24.4075 8.73997 24.6063C8.66052 24.7009 8.58887 24.8017 8.52571 24.9078C8.35331 25.2087 8.18769 25.5146 8.02391 25.8216C7.94141 25.9761 7.86998 26.1354 7.79117 26.2979L9.27932 27.5028C9.243 27.6 9.20913 27.6978 9.1765 27.7963C8.9411 28.5193 8.82263 29.2752 8.82555 30.0355C8.20985 30.2269 7.604 30.4232 7 30.6275C7.07056 31.5256 7.26427 32.4097 7.57568 33.2551L9.49851 33.0292C9.53607 33.1068 9.5724 33.1843 9.6118 33.2612C9.95014 33.9253 10.3904 34.5324 10.9165 35.0605L10.057 36.7632C10.0648 36.7775 10.074 36.7909 10.0847 36.8032C10.1598 36.8697 10.2337 36.9392 10.3137 37.0007C10.8318 37.4005 11.3839 37.754 11.9638 38.0573C12.0684 38.1127 12.1719 38.1717 12.2759 38.2283L12.3184 38.2425C12.3394 38.2123 12.3572 38.181 12.38 38.152C12.7716 37.685 13.1564 37.2118 13.5252 36.7275C13.6102 36.7583 13.6964 36.789 13.7844 36.8173C14.5101 37.0535 15.2691 37.1715 16.0323 37.1669C16.215 37.7506 16.3987 38.335 16.5834 38.92C16.5932 38.9502 16.6068 38.9815 16.6135 39C17.5316 38.9335 18.4132 38.7539 19.2611 38.3846C19.188 37.7471 19.1149 37.1133 19.0419 36.4832C19.1121 36.45 19.1822 36.4155 19.2512 36.3804C19.9066 36.0472 20.5064 35.6146 21.0293 35.0981L22.7373 35.9792C23.3185 35.2722 23.8382 34.5387 24.2014 33.687L22.7096 32.5C22.7447 32.404 22.7786 32.308 22.8106 32.2108C23.0396 31.507 23.158 30.7719 23.1615 30.0319L24.8769 29.4614C24.9187 29.4473 24.9594 29.4319 25 29.4165C24.9437 28.5196 24.742 27.6378 24.4028 26.8056C23.7668 26.8591 23.1387 26.9409 22.5089 27.0234H22.5101ZM15.1666 32.556C14.6615 32.3921 14.2163 32.0822 13.8874 31.6654C13.5586 31.2487 13.3607 30.7438 13.319 30.2146C13.2772 29.6855 13.3934 29.1558 13.6528 28.6927C13.9123 28.2295 14.3033 27.8537 14.7765 27.6127C15.2497 27.3716 15.7837 27.2763 16.3112 27.3386C16.8386 27.401 17.3356 27.6183 17.7395 27.963C18.1434 28.3077 18.4358 28.7644 18.58 29.2753C18.7241 29.7861 18.7135 30.3282 18.5493 30.833C18.329 31.5096 17.849 32.071 17.2147 32.3941C16.5805 32.7172 15.8438 32.7754 15.1666 32.556Z" fill="white"/>
+                    <path d="M16 0C11.557 0 8 3.62843 8 8C8 12.3716 11.5544 16 16 16C20.3689 16 24 12.3716 24 8C24 3.62843 20.4456 0 16 0ZM16 14.5137C12.4456 14.5137 9.48364 11.5517 9.48364 7.99736C9.48364 4.44298 12.3716 1.48099 16 1.48099C19.5544 1.48099 22.5164 4.44298 22.5164 7.99736C22.5164 11.5517 19.5544 14.5137 16 14.5137Z" fill="white"/>
+                    <path d="M32 27.2361C32 21.5833 24.8474 17 16 17C7.15262 17 0 21.5833 0 27.2361C0 27.6944 0.307639 28 0.769099 28C1.23056 28 1.53751 27.6944 1.53751 27.2361C1.53751 22.4236 7.99794 18.5278 15.9966 18.5278C23.9952 18.5278 30.4611 22.4236 30.4611 27.2361C30.4611 27.6944 30.7688 28 31.2302 28C31.4341 27.9996 31.6296 27.9191 31.7739 27.7759C31.9182 27.6327 31.9995 27.4387 32 27.2361Z" fill="white"/>
+                    </svg>
+                    <span class="flc-slidingPanel-toggleButton-label fl-slidingPanel-toggleButton-label">Show/Hide</span>
+                </span>
+            </button>
+
+            <!-- This is the div that will contain the Preference Editor component -->
+            <div class="flc-slidingPanel-panel flc-prefsEditor-iframe fl-prefsEditor-iframe"></div>
+        </div>
+        <!-- END markup for Preference Editor -->
+
+        <!-- BEGIN markup for Preference Editor -->
+        <!-- <div class="flc-prefsEditor-separatedPanel fl-prefsEditor-separatedPanel">
             <div class="fl-panelBar fl-panelBar-smallScreen">
                 <span class="fl-prefsEditor-buttons">
                     <button class="flc-slidingPanel-toggleButton fl-prefsEditor-showHide"> Show/Hide</button>
@@ -112,20 +133,15 @@
                 </span>
             </div>
 
-            <!-- This is the div that will contain the Preference Editor component -->
             <div class="flc-slidingPanel-panel flc-prefsEditor-iframe"></div>
 
-            <!--
-                This div is for the sliding panel bar that shows and hides the Preference Editor controls in the desktop view.
-                A separate panel bar for desktop displays is needed to preserver the correct tab order.
-            -->
             <div class="fl-panelBar fl-panelBar-wideScreen">
                 <span class="fl-prefsEditor-buttons">
                     <button class="flc-slidingPanel-toggleButton fl-prefsEditor-showHide"> Show/Hide</button>
                     <button class="flc-prefsEditor-reset fl-prefsEditor-reset"><span class="fl-icon-undo"></span> Reset</button>
                 </span>
             </div>
-        </div>
+        </div> -->
         <!-- END markup for Preference Editor -->
 
         <main class="fl-centered">

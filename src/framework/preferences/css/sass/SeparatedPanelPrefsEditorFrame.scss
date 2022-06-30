@@ -65,7 +65,8 @@ html {
 
     // Preference Panels
     .fl-prefsEditor-panels {
-        display: table;
+        display: flex;
+        flex-direction: column;
         margin: 0;
         white-space: nowrap;
 

@@ -27,8 +27,8 @@ fluid.tests.createSlidingPanel = function (options) {
                     funcName: "fluid.messageResolver",
                     args: {
                         messageBase: {
-                            "slidingPanelShowText": "+ Show Display Preferences",
-                            "slidingPanelHideText": "- Hide"
+                            "slidingPanelShowText": "User Display Preferences",
+                            "slidingPanelHideText": "User"
                         }
                     }
                 }

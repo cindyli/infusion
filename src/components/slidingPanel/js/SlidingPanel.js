@@ -21,7 +21,7 @@ fluid.defaults("fluid.slidingPanel", {
     selectors: {
         panel: ".flc-slidingPanel-panel",
         toggleButton: ".flc-slidingPanel-toggleButton",
-        toggleButtonLabel: ".flc-slidingPanel-toggleButton"
+        toggleButtonLabel: ".flc-slidingPanel-toggleButton-label"
     },
     strings: {
         showText: "show",
